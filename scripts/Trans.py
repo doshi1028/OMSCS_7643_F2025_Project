@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, TensorDataset
 import numpy as np
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -33,7 +33,7 @@ class PositionalEncoding(nn.Module):
         )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        self.pe = pe.unsqueeze(0)  # (1, max_len, d_model)
+        self.register_buffer("pe", pe.unsqueeze(0))# (1, max_len, d_model)
 
     def forward(self, x):
         return x + self.pe[:, :x.size(1)]
@@ -205,3 +205,72 @@ def predict(model, X):
     X = torch.tensor(X, dtype=torch.float32).to(device)
     with torch.no_grad():
         return model(X).cpu().numpy()
+
+
+
+## Classifer
+
+class TransformerClassifier(nn.Module):
+    def __init__(self, input_dim, hidden_dim=128, num_layers=2, nhead=4):
+        super().__init__()
+
+        self.encoder_layer = nn.TransformerEncoderLayer(
+            d_model=input_dim,
+            nhead=nhead,
+            dim_feedforward=hidden_dim,
+            batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(
+            self.encoder_layer, num_layers=num_layers
+        )
+
+        self.fc = nn.Linear(input_dim, 1)
+
+    def forward(self, x):
+        h = self.transformer(x)
+        h_last = h[:, -1, :]        
+        out = self.fc(h_last)
+        return out.reshape(-1)      
+
+def train_classifier(X_train, y_train, X_val, y_val,
+                     lr=1e-4, batch_size=32, epochs=20):
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    X_train_t = torch.tensor(X_train, dtype=torch.float32)
+    y_train_t = torch.tensor(y_train, dtype=torch.float32)
+    X_val_t   = torch.tensor(X_val, dtype=torch.float32)
+    y_val_t   = torch.tensor(y_val, dtype=torch.float32)
+
+    train_loader = DataLoader(TensorDataset(X_train_t, y_train_t),
+                              batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(TensorDataset(X_val_t, y_val_t),
+                            batch_size=batch_size)
+
+    model = TransformerClassifier(input_dim=X_train.shape[2]).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    loss_fn = nn.BCEWithLogitsLoss()
+
+    for epoch in range(epochs):
+        model.train()
+        for xb, yb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
+
+            logits = model(xb)
+            loss = loss_fn(logits, yb)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        # ---- validation ----
+        model.eval()
+        with torch.no_grad():
+            val_logits = model(X_val_t.to(device))
+            val_loss = loss_fn(val_logits, y_val_t.to(device)).item()
+
+        print(f"Epoch {epoch+1}/{epochs} | Val Loss = {val_loss:.4f}")
+
+    return model
+
+
