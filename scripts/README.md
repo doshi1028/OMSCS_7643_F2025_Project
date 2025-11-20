@@ -1,9 +1,10 @@
 # OMSCS 7463: Deep Learning  
 ## Final Project — Financial News Embeddings for Crypto Return Prediction
 
-### Team Members
-- Student A  
-- Student B  
+### FinSignalX Team Members  
+- Zhenning Liu 
+- YongCheng Li
+- Yang Jiao
 
 ---
 
@@ -59,5 +60,139 @@ project/
 ├── README.md
 └── requirements.txt
 ```
+
+# 🏃‍♂️ How to Run 
+
+suports **2 run methods**——one-click (recommend) or step by step.
+
+---
+
+## ✅ **Option 1: One-click Full Pipeline（推荐）**
+
+### **default mode（MLP，single hour）**
+./run_all.sh
+
+### **run LSTM with sequence length 12 (fox example)**
+./run_all.sh transformer 12
+
+
+The whole procedure：
+
+- clean data
+- generate FinBERT embeddings
+- clustering hourly features
+- construct X, y
+- model training
+- output predicted results
+
+results saved at: 
+- output/models/
+- output/predictions/
+
+
+---
+
+# ✅ **Option 2: Step-by-Step Execution**
+
+Run below script step by step in debugging mode: 
+
+---
+
+## **1. Preprocess raw data**
+python src/preprocess.py
+
+- `output/clean_news.parquet`
+- `output/clean_market.parquet`
+- `output/merged_dataset.parquet`
+
+---
+
+## **2. Generate FinBERT embeddings**
+python src/embedding.py
+
+- `output/embeddings/BTC_embeddings.parquet`
+
+---
+
+## **3. Build ML dataset**
+python src/build_features.py
+
+- `output/features/X.npy`
+- `output/features/y.npy`
+
+---
+
+## **4. Train model**
+python src/train.py --model lstm --seq_len 12   #example（LSTM with sequence length 12）
+
+- `output/models/<model_name>_best.pt`
+  
+---
+## **5. Predict**
+python src/predict.py --model lstm --seq_len 12
+- `output/predictions/predictions_lstm.csv`
+
+
+---
+
+# 📊 Models
+
+### ✔ MLP Baseline  
+- input：current hour embedding  
+- as sanity baseline  
+
+### ✔ LSTM Regressor  
+- input：sequence length N hour
+- to learn timely reliance
+
+### ✔ Transformer Encoder  
+- strongest modal? 
+- support multi-head attention
+- support complex context
+
+---
+
+# 📈 Dataset
+
+### **Features (X)**  
+- 768-dim FinBERT embedding  
+- expantable：  
+  - number of news
+  - pos/neg sentimantal count
+  - index（SMA、RSI、MACD）  
+
+### **Labels (y)**  
+return_t = (close[t+1] - close[t]) / close[t]
+
+
+---
+
+# 🔧 Installation
+pip install -r requirements.txt
+
+
+---
+
+# 🔒 Ethical Notes
+
+- Data are all public data 
+- results cannot be used for trading 
+- news sentiment may have bias  
+
+---
+
+# 🧠 Reproducibility
+
+./run_all.sh transformer 12
+
+
+
+
+
+
+
+
+
+
 
 
