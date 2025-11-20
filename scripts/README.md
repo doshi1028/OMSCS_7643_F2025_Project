@@ -31,4 +31,33 @@ All steps are automated via `run_all.sh`.
 ---
 
 # 📂 Project Structure
+```bash
+project/
+│
+├── data/
+│ ├── crypto_data_hourly/ # Hourly parquet files for BTC, ETH, etc.
+│ ├── cryptopanic_news.csv # Raw CryptoPanic news dataset
+│
+├── output/
+│ ├── clean_news.parquet # Cleaned news data
+│ ├── clean_market.parquet # Cleaned market data
+│ ├── merged_dataset.parquet # News aligned with market hours
+│ ├── embeddings/ # Per-symbol FinBERT embeddings
+│ ├── features/ # Final ML dataset (X.npy, y.npy)
+│ ├── models/ # Saved models (best.pt)
+│ ├── predictions/ # Model prediction results CSV
+│
+├── src/
+│ ├── preprocess.py # Clean + align news & market data
+│ ├── embedding.py # Generate FinBERT/FinGPT embeddings
+│ ├── build_features.py # Build feature matrix X and labels y
+│ ├── model.py # MLP, LSTM, Transformer models
+│ ├── train.py # Training loop with early stopping
+│ ├── predict.py # Generate predictions using best model
+│
+├── run_all.sh # One-click full pipeline execution
+├── README.md
+└── requirements.txt
+```
+
 
