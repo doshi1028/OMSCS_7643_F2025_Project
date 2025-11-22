@@ -2,7 +2,7 @@ import argparse
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-from sripts.model import get_model
+from model import get_model
 from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
@@ -57,7 +57,7 @@ def predict(model, loader, device):
 # -------------------------------------------------------
 # Main Function
 # -------------------------------------------------------
-def run_predict(model_name, seq_len=1, batch_size=64):
+def run_predict(model_name, seq_len=1, batch_size=64, train_split=0.8):
     print("\n=== Loading dataset for inference ===")
 
     X = np.load(FEATURE_DIR / "X.npy")
@@ -87,10 +87,16 @@ def run_predict(model_name, seq_len=1, batch_size=64):
 
     preds = predict(model, loader, device)
 
+    total = len(y[: len(preds)])
+    split_idx = int(total * train_split)
+    split_idx = max(0, min(split_idx, total))
+    subset = np.array(["train"] * split_idx + ["test"] * (total - split_idx))
+
     print("\n=== Building results table ===")
     df = pd.DataFrame({
         "pred": preds,
-        "target": y[:len(preds)]
+        "target": y[:len(preds)],
+        "subset": subset
     })
 
     out_fp = PRED_DIR / f"predictions_{model_name}.csv"
@@ -111,11 +117,14 @@ if __name__ == "__main__":
                         choices=["lr", "mlp", "lstm", "transformer"])
     parser.add_argument("--seq_len", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--train_split", type=float, default=0.8,
+                        help="Fraction of chronological samples considered in-sample.")
 
     args = parser.parse_args()
 
     run_predict(
         model_name=args.model,
         seq_len=args.seq_len,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        train_split=args.train_split,
     )

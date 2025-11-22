@@ -9,6 +9,8 @@ MARKET_SOURCE = DATA_DIR / "BTC_USD_hourly.parquet"  # directory or single parqu
 NEWS_FILE = DATA_DIR / "cryptopanic_news.csv"
 OUTPUT_DIR = Path("output")
 OUTPUT_DIR.mkdir(exist_ok=True)
+CLEAN_DIR = OUTPUT_DIR / "data"
+CLEAN_DIR.mkdir(exist_ok=True)
 
 def clean_news(df):
     """Clean CryptoPanic news: handle NaN, combine title/description, normalize datetime."""
@@ -122,11 +124,11 @@ def main():
 
     news_raw = pd.read_csv(NEWS_FILE)
     news_clean = clean_news(news_raw)
-    news_clean.to_parquet(OUTPUT_DIR / "clean_news.parquet")
+    news_clean.to_parquet(CLEAN_DIR / "clean_news.parquet")
     print("Saved clean_news.parquet\n")
 
     market = load_and_clean_market()
-    market.to_parquet(OUTPUT_DIR / "clean_market.parquet")
+    market.to_parquet(CLEAN_DIR / "clean_market.parquet")
     print("Saved clean_market.parquet\n")
 
     print("\n Preprocess pipeline complete!")

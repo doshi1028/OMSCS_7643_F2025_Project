@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-MARKET_FILE = Path("output/clean_market.parquet")
+MARKET_FILE = Path("output/data/clean_market.parquet")
 EMB_FILE = Path("output/embeddings/hourly_embeddings.parquet")
 FEATURE_DIR = Path("output/features")
 FEATURE_DIR.mkdir(exist_ok=True)
@@ -64,7 +64,7 @@ def build_features_for_symbol(
     with shape [N, lookback, D] or custom aggregations. For now we average
     embeddings across the lookback window to produce one vector per hour.
     """
-    df = df_symbol.merge(hourly_emb, on="hour", how="left")
+    df = pd.merge(hourly_emb, df_symbol, on="hour", how="inner")
 
     df["embedding"] = df["embedding"].apply(
         lambda x: np.array(x, dtype=np.float32)

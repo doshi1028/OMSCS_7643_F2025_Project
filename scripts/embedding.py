@@ -5,7 +5,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel
 import numpy as np
 
-INPUT_FILE = Path("output/clean_news.parquet")
+INPUT_FILE = Path("output/data/clean_news.parquet")
 OUTPUT_DIR = Path("output/embeddings")
 OUTPUT_DIR.mkdir(exist_ok=True)
 OUTPUT_FILE = OUTPUT_DIR / "hourly_embeddings.parquet"

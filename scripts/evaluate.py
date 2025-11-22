@@ -65,6 +65,17 @@ class StrategyMetrics:
     flat_ratio: float
 
 
+def to_native_dict(mapping: Dict) -> Dict:
+    """Convert numpy scalar values in a dict to native Python scalars."""
+    native = {}
+    for key, value in mapping.items():
+        if isinstance(value, np.generic):
+            native[key] = value.item()
+        else:
+            native[key] = value
+    return native
+
+
 def load_feature_arrays() -> Tuple[np.ndarray, np.ndarray]:
     X_path = FEATURE_DIR / "X.npy"
     y_path = FEATURE_DIR / "y.npy"
@@ -219,9 +230,26 @@ def evaluate_predictions(
     regression = compute_regression_metrics(y_true, y_pred)
     strategy = simulate_trading_strategy(y_true, y_pred, threshold=signal_threshold)
 
+    subset_metrics = {}
+    if "subset" in df.columns:
+        for subset_name in sorted(df["subset"].dropna().unique()):
+            mask = df["subset"] == subset_name
+            if not mask.any():
+                continue
+            reg = compute_regression_metrics(y_true[mask], y_pred[mask])
+            strat = simulate_trading_strategy(y_true[mask], y_pred[mask], threshold=signal_threshold)
+            subset_metrics[subset_name] = {
+                "regression_metrics": to_native_dict(asdict(reg)),
+                "strategy_metrics": to_native_dict(asdict(strat)),
+                "num_samples": int(mask.sum()),
+            }
+
+    if subset_metrics:
+        return {"subset_metrics": subset_metrics}
+
     return {
-        "regression_metrics": asdict(regression),
-        "strategy_metrics": asdict(strategy),
+        "regression_metrics": to_native_dict(asdict(regression)),
+        "strategy_metrics": to_native_dict(asdict(strategy)),
     }
 
 
@@ -239,9 +267,9 @@ def linear_regression_report(
     strategy = simulate_trading_strategy(y_test, preds, threshold)
 
     return {
-        "regression_metrics": asdict(regression),
-        "strategy_metrics": asdict(strategy),
-        "threshold": threshold,
+        "regression_metrics": to_native_dict(asdict(regression)),
+        "strategy_metrics": to_native_dict(asdict(strategy)),
+        "threshold": float(threshold),
     }
 
 
@@ -265,13 +293,13 @@ def main() -> None:
     parser.add_argument(
         "--holdout",
         type=float,
-        default=0.3,
+        default=0.2,
         help="Fraction of the feature dataset reserved for testing the linear baseline.",
     )
     parser.add_argument(
         "--signal-percentile",
         type=float,
-        default=60.0,
+        default=50.0,
         help="Percentile of |return| used to set the long/short threshold.",
     )
     parser.add_argument(
