@@ -36,10 +36,10 @@ python scripts/preprocess.py
 ```
 
 Inputs: `data/BTC_USD_hourly.parquet` (or directory of parquet files) and `data/cryptopanic_news.csv`.  
-Outputs:
+Outputs (stored under `output/data/`):
 
-- `output/clean_news.parquet` – cleaned headlines with hourly timestamps  
-- `output/clean_market.parquet` – normalized OHLCV per symbol
+- `output/data/clean_news.parquet` – cleaned headlines with hourly timestamps  
+- `output/data/clean_market.parquet` – normalized OHLCV per symbol
 
 > ⚠️ Temporary assumption: every headline is attributed to BTC while the spaCy-based asset-tagging module is under development. Update `align_news_to_market` once multi-asset tagging is ready so each `(symbol, hour)` receives only its own news texts.
 
@@ -49,7 +49,7 @@ Outputs:
 python scripts/embedding.py
 ```
 
-Reads `output/clean_news.parquet`, aggregates headlines per hour, and runs FinBERT (configurable via `MODEL_NAME`). Saves `output/embeddings/hourly_embeddings.parquet`, which holds one embedding vector per hour (plus sentiment counts).
+Reads `output/data/clean_news.parquet`, aggregates headlines per hour, and runs FinBERT (configurable via `MODEL_NAME`). Saves `output/embeddings/hourly_embeddings.parquet`, which holds one embedding vector per hour (plus sentiment counts).
 
 ## 3. Feature building
 
@@ -57,7 +57,7 @@ Reads `output/clean_news.parquet`, aggregates headlines per hour, and runs FinBE
 python scripts/build_features.py
 ```
 
-Merges `output/clean_market.parquet` with `output/embeddings/hourly_embeddings.parquet`, computes next-hour returns, and averages embeddings over a configurable lookback window (default 12 hours). Outputs:
+Merges `output/data/clean_market.parquet` with `output/embeddings/hourly_embeddings.parquet`, computes next-hour returns, and averages embeddings over a configurable lookback window (default 12 hours). Outputs:
 
 - `output/features/X.npy` – averaged embedding features
 - `output/features/y.npy` – aligned next-hour returns
@@ -80,18 +80,18 @@ Saves the best checkpoint to `output/models/<model>_best.pt`.
 python scripts/predict.py --model lr --seq_len 1
 ```
 
-Loads the trained checkpoint and produces `output/predictions/predictions_<model>.csv` containing `pred` (forecasted next-hour return) and `target` (realized return). Sequence lengths >1 reuse the same label alignment logic as training.
+Loads the trained checkpoint and produces `output/predictions/predictions_<model>.csv` containing `pred` (forecasted next-hour return), `target` (realized return), and `subset` labels (`train` vs `test`, based on the chronological split defined by `--train_split`). Sequence lengths >1 reuse the same label alignment logic as training.
 
 ## 6. Performance evaluation
 
 ```
-python scripts/evaluate.py  # optional --predictions output/predictions/predictions_<model>.csv
+python scripts/evaluate.py --predictions output/predictions/predictions_<model>.csv
 ```
 
 The evaluator:
 
 1. Fits the **linear regression baseline** on `output/features/X.npy` vs. `y.npy` (chronological split).
-2. If `--predictions` is provided, scores that CSV (any downstream model).
+2. If `--predictions` is provided, scores that CSV (any downstream model). When a `subset` column exists, only the `train`/`test` metrics are reported for that file (no full-sample aggregate).
 3. Reports regression metrics (MSE, RMSE, MAE, MAPE, R², directional accuracy, Pearson/Spearman information coefficients, up/down precision & recall).
 4. Runs a naive long/flat/short backtest by thresholding predicted returns (threshold learned from the baseline’s training split).
 
