@@ -3,6 +3,21 @@ import torch.nn as nn
 
 
 # ------------------------------------------------------
+# 0. LINEAR REGRESSION BASELINE
+# ------------------------------------------------------
+class LinearRegressor(nn.Module):
+    def __init__(self, input_dim=768):
+        super().__init__()
+        self.linear = nn.Linear(input_dim, 1)
+
+    def forward(self, x):
+        if x.dim() > 2:
+            # Flatten sequences before the linear head
+            x = x[:, -1, :]
+        return self.linear(x).squeeze(-1)
+
+
+# ------------------------------------------------------
 # 1. MLP BASELINE
 # ------------------------------------------------------
 class MLPRegressor(nn.Module):
@@ -136,6 +151,9 @@ class TransformerRegressor(nn.Module):
 # ------------------------------------------------------
 def get_model(model_name, input_dim=768):
     model_name = model_name.lower()
+
+    if model_name == "lr":
+        return LinearRegressor(input_dim=input_dim)
 
     if model_name == "mlp":
         return MLPRegressor(input_dim=input_dim)

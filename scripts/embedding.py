@@ -1,4 +1,3 @@
-import os
 import torch
 import pandas as pd
 from pathlib import Path
@@ -6,11 +5,12 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel
 import numpy as np
 
-INPUT_FILE = Path("output/merged_dataset.parquet")
+INPUT_FILE = Path("output/clean_news.parquet")
 OUTPUT_DIR = Path("output/embeddings")
 OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_FILE = OUTPUT_DIR / "hourly_embeddings.parquet"
 
-MODEL_NAME = "ProsusAI/finbert"     # can be replaced with "FinGPT/fingpt-sentiment"
+MODEL_NAME = "ProsusAI/finbert"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -23,83 +23,63 @@ def load_model():
     return tokenizer, model
 
 
-def get_sentence_embedding(texts, tokenizer, model):
-    """
-    lists of news (list[str]) -->  one hourly embedding (mean pooling).
-    if no news， then return all zero embedding.
-    """
-    if len(texts) == 0:
+def get_sentence_embedding(text, tokenizer, model):
+    normalized = (text or "").strip()
+    if not normalized:
         return np.zeros(model.config.hidden_size, dtype=np.float32)
 
     inputs = tokenizer(
-        texts,
-        padding=True,
+        normalized,
         truncation=True,
-        max_length=128,
+        max_length=512,
         return_tensors="pt"
     ).to(DEVICE)
 
     with torch.no_grad():
         outputs = model(**inputs)
-        hidden = outputs.last_hidden_state  # [B, T, H]
-        # CLS token embedding per sentence
-        cls_embeddings = hidden[:, 0, :]     # [B, H]
+        hidden = outputs.last_hidden_state  # [1, T, H]
+        cls_embeddings = hidden[:, 0, :]     # [1, H]
 
-    # cluster all news CLS embedding → hourly embedding
-    embedding = cls_embeddings.mean(dim=0).cpu().numpy()
+    embedding = cls_embeddings.squeeze(0).cpu().numpy()
     return embedding.astype(np.float32)
 
 
-def process_symbol(df_symbol, tokenizer, model, symbol):
-    """
-    Process one symbol (e.g., BTC) and compute embeddings for each hour.
-    """
-    print(f"\n🔹 Processing {symbol}, rows = {len(df_symbol)}")
-
-    embeddings = []
-
-    for _, row in tqdm(df_symbol.iterrows(), total=len(df_symbol)):
-        news_list = row["news_texts"]
-        emb = get_sentence_embedding(news_list, tokenizer, model)
-        embeddings.append(emb)
-
-    df_symbol["embedding"] = embeddings
-
-    # Save parquet
-    out_fp = OUTPUT_DIR / f"{symbol}_embeddings.parquet"
-
-    df_save = df_symbol[["hour", "symbol", "embedding"]].copy()
-    df_save.to_parquet(out_fp)
-
-    print(f"Saved {symbol} embeddings → {out_fp}")
-    return df_save
+def aggregate_news(df: pd.DataFrame) -> pd.DataFrame:
+    agg = (
+        df.groupby("hour")
+        .agg({
+            "text": lambda s: " ".join(s),
+            "positive": "sum",
+            "negative": "sum",
+        })
+        .rename(columns={"text": "news_text"})
+        .reset_index()
+    )
+    return agg
 
 
 def main():
     print("\n=== Generating Embeddings ===")
 
-    # 1. Load merged dataset
-    df = pd.read_parquet(INPUT_FILE)
-    print(f"✔ Loaded merged dataset: {df.shape}")
+    if not INPUT_FILE.exists():
+        raise FileNotFoundError(f"Clean news parquet not found: {INPUT_FILE}")
 
-    # 2. Load FinBERT / FinGPT
+    df = pd.read_parquet(INPUT_FILE)
+    print(f"✔ Loaded clean news: {df.shape}")
+    agg_news = aggregate_news(df)
+    print(f"✔ Aggregated into {len(agg_news)} hourly rows")
+
     tokenizer, model = load_model()
 
-    # 3. Symbol list
-    symbols = sorted(df["symbol"].unique())
-    print(f"Symbols found: {symbols}")
+    embeddings = []
+    for _, row in tqdm(agg_news.iterrows(), total=len(agg_news)):
+        emb = get_sentence_embedding(row["news_text"], tokenizer, model)
+        embeddings.append(emb.tolist())
 
-    # 4. Process each symbol independently
-    for symbol in symbols:
-        out_fp = OUTPUT_DIR / f"{symbol}_embeddings.parquet"
-        if out_fp.exists():
-            print(f"⏭ Skipping {symbol}, cached file found.")
-            continue
-
-        df_symbol = df[df["symbol"] == symbol].copy()
-        process_symbol(df_symbol, tokenizer, model, symbol)
-
-    print("\n Embedding pipeline finished!")
+    agg_news["embedding"] = embeddings
+    agg_news.to_parquet(OUTPUT_FILE)
+    print(f"Saved hourly embeddings → {OUTPUT_FILE}")
+    print("\nEmbedding pipeline finished!")
 
 
 if __name__ == "__main__":

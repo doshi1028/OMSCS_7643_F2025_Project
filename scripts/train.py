@@ -24,23 +24,25 @@ class CryptoDataset(Dataset):
         y: (N,)
         seq_len: if > 1, reshape X into sequences for LSTM/Transformer
         """
-        self.X = X
-        self.y = y
         self.seq_len = seq_len
 
         if seq_len > 1:
-            self.X = self.build_sequences(X, seq_len)
+            self.X, self.y = self.build_sequences(X, y, seq_len)
+        else:
+            self.X, self.y = X, y
 
-    def build_sequences(self, X, seq_len):
+    @staticmethod
+    def build_sequences(X, y, seq_len):
         """
-        Build overlapping sequences for time series models.
-        X shape: (N, input_dim)
-        Output: (N - seq_len + 1, seq_len, input_dim)
+        Build overlapping sequences for time series models and align labels with
+        the last timestep in each window to avoid leakage.
         """
         seq_data = []
-        for i in range(len(X) - seq_len + 1):
-            seq_data.append(X[i : i + seq_len])
-        return np.array(seq_data)
+        targets = []
+        for i in range(seq_len - 1, len(X)):
+            seq_data.append(X[i - seq_len + 1 : i + 1])
+            targets.append(y[i])
+        return np.array(seq_data), np.array(targets)
 
     def __len__(self):
         return len(self.X)
@@ -160,8 +162,8 @@ def train(model_name, seq_len=1, batch_size=64, lr=1e-4, epochs=30):
 # -------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="mlp",
-                        choices=["mlp", "lstm", "transformer"])
+    parser.add_argument("--model", type=str, default="lr",
+                        choices=["lr", "mlp", "lstm", "transformer"])
     parser.add_argument("--seq_len", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-4)

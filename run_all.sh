@@ -3,14 +3,15 @@
 # ============================================
 #  Run the entire pipeline end-to-end
 #  Usage:
+#      ./run_all.sh lr 1
 #      ./run_all.sh mlp 1
 #      ./run_all.sh lstm 12
 #      ./run_all.sh transformer 12
 #
-#  If no args given -> default model=mlp, seq_len=1
+#  If no args given -> default model=lr, seq_len=1
 # ============================================
 
-MODEL=${1:-mlp}
+MODEL=${1:-lr}
 SEQ_LEN=${2:-1}
 
 echo "=============================================="
@@ -21,7 +22,7 @@ echo "=============================================="
 
 echo ""
 echo "=== Step 1: Preprocess data ==="
-python src/preprocess.py
+python scripts/preprocess.py
 if [ $? -ne 0 ]; then
     echo "preprocess.py failed"
     exit 1
@@ -29,7 +30,7 @@ fi
 
 echo ""
 echo "=== Step 2: Generate embeddings ==="
-python src/embedding.py
+python scripts/embedding.py
 if [ $? -ne 0 ]; then
     echo "embedding.py failed"
     exit 1
@@ -37,7 +38,7 @@ fi
 
 echo ""
 echo "=== Step 3: Build ML features ==="
-python src/build_features.py
+python scripts/build_features.py
 if [ $? -ne 0 ]; then
     echo "build_features.py failed"
     exit 1
@@ -45,7 +46,7 @@ fi
 
 echo ""
 echo "=== Step 4: Train model ($MODEL) ==="
-python src/train.py --model $MODEL --seq_len $SEQ_LEN
+python scripts/train.py --model $MODEL --seq_len $SEQ_LEN
 if [ $? -ne 0 ]; then
     echo "train.py failed"
     exit 1
@@ -53,7 +54,7 @@ fi
 
 echo ""
 echo "=== Step 5: Predict using best model ==="
-python src/predict.py --model $MODEL --seq_len $SEQ_LEN
+python scripts/predict.py --model $MODEL --seq_len $SEQ_LEN
 if [ $? -ne 0 ]; then
     echo "predict.py failed"
     exit 1

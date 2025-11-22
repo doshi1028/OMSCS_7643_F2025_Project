@@ -9,6 +9,9 @@ dependencies:
   - torchvision=0.17
   - torchaudio=2.2
   - numpy=1.26
+  - scikit-learn=1.4
+  - pandas=2.1
+  - pyarrow=15.0
   - pip:
       - transformers==4.38.2
       - accelerate==0.28.0

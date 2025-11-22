@@ -2,7 +2,7 @@ import argparse
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-from model import get_model
+from sripts.model import get_model
 from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
@@ -18,16 +18,17 @@ PRED_DIR.mkdir(exist_ok=True)
 # -------------------------------------------------------
 class CryptoDataset(Dataset):
     def __init__(self, X, seq_len=1):
-        self.X = X
         self.seq_len = seq_len
-
         if seq_len > 1:
             self.X = self.build_sequences(X, seq_len)
+        else:
+            self.X = X
 
-    def build_sequences(self, X, seq_len):
+    @staticmethod
+    def build_sequences(X, seq_len):
         seq_data = []
-        for i in range(len(X) - seq_len + 1):
-            seq_data.append(X[i : i + seq_len])
+        for i in range(seq_len - 1, len(X)):
+            seq_data.append(X[i - seq_len + 1 : i + 1])
         return np.array(seq_data)
 
     def __len__(self):
@@ -65,8 +66,7 @@ def run_predict(model_name, seq_len=1, batch_size=64):
     # Handle sequence data
     if seq_len > 1:
         print(f"Using sequence length = {seq_len}")
-        effective_len = len(X) - seq_len + 1
-        y = y[seq_len - 1:]   # align y with last element in each sequence
+        y = y[seq_len - 1 :]   # align y with last element in each sequence
 
     dataset = CryptoDataset(X, seq_len=seq_len)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
@@ -107,8 +107,8 @@ def run_predict(model_name, seq_len=1, batch_size=64):
 # -------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="mlp",
-                        choices=["mlp", "lstm", "transformer"])
+    parser.add_argument("--model", type=str, default="lr",
+                        choices=["lr", "mlp", "lstm", "transformer"])
     parser.add_argument("--seq_len", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=64)
 
