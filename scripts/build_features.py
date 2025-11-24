@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from pathlib import Path
+import argparse 
 
 MARKET_FILE = Path("output/data/clean_market.parquet")
 EMB_FILE = Path("output/embeddings/hourly_embeddings.parquet")
@@ -11,17 +12,17 @@ EMBED_DIM = 768
 LOOKBACK_HOURS = 12
 
 
-def compute_returns(df):
+def compute_returns(df, horizon):
     """
     Compute next-hour return:
-      return_t = (close_{t+1} - close_t) / close_t
+      return_t = (close_{t+h} - close_t) / close_t
     """
     df = df.sort_values("hour").copy()
-    df["close_next"] = df["close"].shift(-1)
-    df["return"] = (df["close_next"] - df["close"]) / df["close"]
+    df[f"close_t+{horizon}"] = df["close"].shift(-horizon)
+    df["return"] = (df[f"close_t+{horizon}"] - df["close"]) / df["close"]
 
-    # Remove last row (no next-hour close)
-    df = df[:-1]
+    # Remove unavailable rows(no next-h-hours' close)
+    df = df[: -horizon]
     return df
 
 
@@ -54,7 +55,9 @@ def _align_targets(y: np.ndarray, lookback: int) -> np.ndarray:
 def build_features_for_symbol(
     df_symbol: pd.DataFrame,
     hourly_emb: pd.DataFrame,
+    horizons,
     lookback: int = LOOKBACK_HOURS,
+    perf_foresight: bool = False,
 ):
     """
     Merge embeddings with market data and compute features + targets.
@@ -66,6 +69,12 @@ def build_features_for_symbol(
     """
     df = pd.merge(hourly_emb, df_symbol, on="hour", how="inner")
 
+    if perf_foresight:
+        df = df[(df["positive"] > 0) | (df["negative"] > 0)].copy()
+        if df.empty:
+            return df, np.empty((0, EMBED_DIM)), np.empty(0)
+        print(f"perf_foresight={perf_foresight}: kept {len(df)} rows with positive/negative signals")
+
     df["embedding"] = df["embedding"].apply(
         lambda x: np.array(x, dtype=np.float32)
         if isinstance(x, (list, np.ndarray))
@@ -73,7 +82,7 @@ def build_features_for_symbol(
     )
 
     # Compute next-hour returns
-    df = compute_returns(df)
+    df = compute_returns(df, horizons)
 
     embeddings = np.stack(df["embedding"].values)
     y = df["return"].values.astype(np.float32)
@@ -89,6 +98,16 @@ def build_features_for_symbol(
 def main():
     print("\n=== Building ML features ===")
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--horizon",
+        type=int,
+        default=1,
+        help="How many hours ahead to predict the return (e.g. --horizon 3)"
+    )
+    args = parser.parse_args()
+    horizon = args.horizon
+
     if not MARKET_FILE.exists():
         raise FileNotFoundError(f"Clean market parquet not found: {MARKET_FILE}")
     if not EMB_FILE.exists():
@@ -102,6 +121,8 @@ def main():
 
     all_X, all_y = [], []
     records = []
+    
+    perfect_foresight = True
 
     for symbol in symbols:
         print(f"\n--- Processing {symbol} ---")
@@ -111,7 +132,9 @@ def main():
         df_feat, X, y = build_features_for_symbol(
             df_symbol,
             hourly_emb,
+            horizon,
             lookback=LOOKBACK_HOURS,
+            perf_foresight=perfect_foresight
         )
 
         if len(X) == 0 or len(y) == 0:

@@ -6,6 +6,8 @@ from model import get_model
 from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
+import json
+import types
 
 FEATURE_DIR = Path("output/features")
 MODEL_DIR = Path("output/models")
@@ -57,7 +59,13 @@ def predict(model, loader, device):
 # -------------------------------------------------------
 # Main Function
 # -------------------------------------------------------
-def run_predict(model_name, seq_len=1, batch_size=64, train_split=0.8):
+def run_predict(args):
+    model_name   = args.model
+    seq_len      = args.seq_len
+    batch_size   = args.batch_size
+    seed         = args.seed
+    train_split  = args.train_split
+    
     print("\n=== Loading dataset for inference ===")
 
     X = np.load(FEATURE_DIR / "X.npy")
@@ -73,7 +81,22 @@ def run_predict(model_name, seq_len=1, batch_size=64, train_split=0.8):
 
     # Load model
     input_dim = X.shape[1]
-    model = get_model(model_name, input_dim=input_dim)
+
+    # === Load training config ===
+    config_path = MODEL_DIR / f"{model_name}_args.json"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Missing training config: {config_path}")
+
+    with open(config_path, "r") as f:
+        saved_cfg = json.load(f)
+
+    # turn dict → object with attributes
+    class Struct: pass
+    model_args = Struct()
+    for k, v in saved_cfg.items():
+        setattr(model_args, k, v)
+
+    model = get_model(model_name, input_dim=input_dim, args=model_args)
 
     model_path = MODEL_DIR / f"{model_name}_best.pt"
     if not model_path.exists():
@@ -84,6 +107,14 @@ def run_predict(model_name, seq_len=1, batch_size=64, train_split=0.8):
     model.to(device)
 
     print(f"\n=== Predicting with {model_name.upper()} on {device} ===")
+    # === If EMA was used in training, load EMA weights ===
+    ema_path = MODEL_DIR / f"{model_name}_ema.pt"
+    if ema_path.exists():
+      print("Loading EMA shadow weights...")
+      ema_state = torch.load(ema_path, map_location=device)
+      for name, param in model.named_parameters():
+          if name in ema_state:
+              param.data.copy_(ema_state[name])
 
     preds = predict(model, loader, device)
 
@@ -113,18 +144,16 @@ def run_predict(model_name, seq_len=1, batch_size=64, train_split=0.8):
 # -------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+
+    # ---- basic ----
     parser.add_argument("--model", type=str, default="lr",
-                        choices=["lr", "mlp", "lstm", "transformer"])
+                        choices=["lr", "mlp", "lstm", "transformer", "gru"])
     parser.add_argument("--seq_len", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--train_split", type=float, default=0.8,
-                        help="Fraction of chronological samples considered in-sample.")
+                    help="Fraction of chronological samples considered in-sample.")
 
     args = parser.parse_args()
 
-    run_predict(
-        model_name=args.model,
-        seq_len=args.seq_len,
-        batch_size=args.batch_size,
-        train_split=args.train_split,
-    )
+    run_predict(args)

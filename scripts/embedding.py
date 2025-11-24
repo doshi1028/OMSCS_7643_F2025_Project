@@ -65,9 +65,9 @@ def main():
         raise FileNotFoundError(f"Clean news parquet not found: {INPUT_FILE}")
 
     df = pd.read_parquet(INPUT_FILE)
-    print(f"✔ Loaded clean news: {df.shape}")
+    print(f"Loaded clean news: {df.shape}")
     agg_news = aggregate_news(df)
-    print(f"✔ Aggregated into {len(agg_news)} hourly rows")
+    print(f"Aggregated into {len(agg_news)} hourly rows")
 
     tokenizer, model = load_model()
 

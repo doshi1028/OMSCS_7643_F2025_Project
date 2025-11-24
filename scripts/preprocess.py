@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
+import re
 
 DATA_DIR = Path("data")
 
@@ -68,7 +69,7 @@ def normalize_text(text):
 
 def clean_news(df):
     """Clean CryptoPanic news: handle NaN, combine title/description, normalize datetime."""
-    print("🔹 Cleaning news data...")
+    print(" Cleaning news data...")
 
     df["title"] = df["title"].fillna("")
     df["description"] = df["description"].fillna("")
@@ -84,7 +85,7 @@ def clean_news(df):
     df = df.dropna(subset=["newsDatetime"])
     df["hour"] = df["newsDatetime"].dt.floor("H")
 
-    print(f"✔ News cleaned: {len(df)} rows remain.")
+    print(f"News cleaned: {len(df)} rows remain.")
     return df[["hour", "text", "positive", "negative"]]
 
 

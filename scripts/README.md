@@ -115,15 +115,16 @@ python src/embedding.py
 ---
 
 ## **3. Build ML dataset**
-python src/build_features.py
+python src/build_features.py --horizon 1
 
+- `Horizon defines the hour length of future return`
 - `output/features/X.npy`
 - `output/features/y.npy`
 
 ---
 
 ## **4. Train model**
-python src/train.py --model lstm --seq_len 12   #example（LSTM with sequence length 12）
+python scripts/train.py --model lstm --seq_len 12 --hidden_dim 256 --num_layers 2     --lstm_proj_dim 128 --lstm_use_attention 1
 
 - `output/models/<model_name>_best.pt`
   
@@ -137,20 +138,85 @@ python src/predict.py --model lstm --seq_len 12
 
 # 📊 Models
 
-### ✔ MLP Baseline  
-- input：current hour embedding  
-- as sanity baseline  
+This project provides several regression architectures for forecasting future crypto returns based on news embeddings. Each model supports variable `seq_len`, adjustable prediction horizon (`--horizon`), EMA, learning rate scheduling, and standardized MSE regression.
 
-### ✔ LSTM Regressor  
-- input：sequence length N hour
-- to learn timely reliance
+## 1. MLP Baseline
+A simple feedforward network using only the current-hour embedding.
 
-### ✔ Transformer Encoder  
-- strongest modal? 
-- support multi-head attention
-- support complex context
+**Arguments**
+- `--hidden_dim`: hidden layer width (default 256)
+- `--dropout`: dropout rate (default 0.1)
 
----
+**Example**
+```bash
+python scripts/train.py --model mlp --hidden_dim 512 --dropout 0.2
+```
+
+## 2. LSTM Regressor
+Sequence model over past `seq_len` hours. Supports LayerNorm and Attention pooling.
+
+**Arguments**
+- `--seq_len`: sequence length
+- `--hidden_dim`: LSTM hidden dimension (default 256)
+- `--num_layers`: number of layers (default 2)
+- `--dropout`: dropout rate (default 0.1)
+- `--lstm_proj_dim`: projection dimension after LSTM (default 128)
+- `--lstm_use_layernorm`: enable LayerNorm (0/1)
+- `--lstm_use_attention`: enable attention pooling (0/1)
+
+**Example**
+```bash
+python scripts/train.py --model lstm --seq_len 12 --hidden_dim 256 --num_layers 2     --lstm_proj_dim 128 --lstm_use_attention 1
+```
+
+## 3. Transformer Encoder
+Multi-head attention encoder for longer sequences. Supports CLS token, learnable/sinusoidal positions, and multiple pooling methods.
+
+**Arguments**
+- `--seq_len`: input sequence length
+- `--tf_d_model`: transformer hidden dimension (default 128)
+- `--tf_heads`: number of attention heads (default 4)
+- `--tf_layers`: number of encoder blocks (default 4)
+- `--tf_ff_dim`: feedforward dimension (default 256)
+- `--tf_dropout`: dropout rate (default 0.1)
+- `--tf_learnable_pos`: learnable positional embeddings (0/1)
+- `--tf_use_cls_token`: add CLS token (0/1)
+- `--tf_pool`: pooling strategy (`attention`, `cls`, `mean`, `last`)
+- `--tf_embed_scale`: embedding scaling factor (default 1.0)
+
+**Example**
+```bash
+python scripts/train.py --model transformer --seq_len 12     --tf_d_model 128 --tf_heads 4 --tf_layers 4     --tf_pool attention --tf_dropout 0.1
+```
+
+## 4. GRU Regressor
+Lightweight alternative to LSTM with attention pooling.
+
+**Arguments**
+- `--seq_len`: input sequence length
+- `--hidden_dim`: GRU hidden dimension (default 256)
+- `--num_layers`: number of layers (default 2)
+- `--dropout`: dropout rate (default 0.2)
+
+**Example**
+```bash
+python scripts/train.py --model gru --seq_len 12 --hidden_dim 256 --num_layers 2
+```
+
+## 5. Linear Regression (LR)
+Simple linear baseline using only the flattened embedding.
+
+**Example**
+```bash
+python scripts/train.py --model lr
+```
+
+## Prediction Usage
+Prediction automatically loads model configuration:
+```bash
+python scripts/predict.py --model transformer --seq_len 12
+```
+
 
 # 📈 Dataset
 
