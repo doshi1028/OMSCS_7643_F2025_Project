@@ -4,12 +4,30 @@ from pathlib import Path
 import argparse 
 
 MARKET_FILE = Path("output/data/clean_market.parquet")
-EMB_FILE = Path("output/embeddings/hourly_embeddings.parquet")
+EMB_DIR = Path("output/embeddings")
 FEATURE_DIR = Path("output/features")
 FEATURE_DIR.mkdir(exist_ok=True)
 
 EMBED_DIM = 768
 LOOKBACK_HOURS = 12
+
+
+def load_embeddings_for_symbol(symbol: str) -> pd.DataFrame:
+    emb_path = EMB_DIR / f"{symbol}_embeddings.parquet"
+    if not emb_path.exists():
+        raise FileNotFoundError(f"Embedding file not found for {symbol}: {emb_path}")
+
+    df = pd.read_parquet(emb_path)
+
+    df["embedding"] = df["embedding"].apply(lambda val: np.array(val, dtype=np.float32))
+    df["pos_count"] = df["positive"]
+    df["neg_count"] = df["negative"]
+
+    df["hour"] = pd.to_datetime(df["hour"]).dt.tz_localize(None)
+    df["newsTimestamp"] = pd.to_datetime(df["newsTimestamp"]).dt.tz_localize(None)
+
+    return df[["hour", "embedding", "pos_count", "neg_count", "newsTimestamp"]]
+
 
 
 def compute_returns(df, horizon):
@@ -26,22 +44,31 @@ def compute_returns(df, horizon):
     return df
 
 
-def _average_lookback_windows(vectors: np.ndarray, lookback: int) -> np.ndarray:
+def _average_lookback_windows(vectors: np.ndarray, hours: np.ndarray, lookback: int) -> np.ndarray:
     """
-    Turn [T, D] vectors into lookback-averaged features of shape [T - lookback + 1, D].
+    Aggregate embeddings by hour and build lookback windows across distinct hours.
     """
-    if lookback <= 1:
-        return vectors
-
-    if len(vectors) < lookback:
+    unique_hours = np.unique(hours)
+    if len(unique_hours) < lookback:
         return np.empty((0, vectors.shape[1]), dtype=vectors.dtype)
 
+    hour_to_vectors = {}
+    for vec, hr in zip(vectors, hours):
+        hour_to_vectors.setdefault(hr, []).append(vec)
+
+    ordered_hours = sorted(hour_to_vectors.keys())
+    hour_embeddings = []
+    for hr in ordered_hours:
+        vecs = hour_to_vectors[hr]
+        hour_embeddings.append(np.mean(np.stack(vecs), axis=0))
+    hour_embeddings = np.stack(hour_embeddings, axis=0)
+
     windows = []
-    for idx in range(lookback, len(vectors) + 1):
-        window = vectors[idx - lookback : idx]
+    for idx in range(lookback, len(hour_embeddings) + 1):
+        window = hour_embeddings[idx - lookback : idx]
         windows.append(window.mean(axis=0))
 
-    return np.stack(windows, axis=0)
+    return np.stack(windows, axis=0), np.array(ordered_hours[lookback - 1 :])
 
 
 def _align_targets(y: np.ndarray, lookback: int) -> np.ndarray:
@@ -54,45 +81,52 @@ def _align_targets(y: np.ndarray, lookback: int) -> np.ndarray:
 
 def build_features_for_symbol(
     df_symbol: pd.DataFrame,
-    hourly_emb: pd.DataFrame,
-    horizons,
+    news_rows: pd.DataFrame,
+    horizon: int,
     lookback: int = LOOKBACK_HOURS,
     perf_foresight: bool = False,
 ):
     """
-    Merge embeddings with market data and compute features + targets.
-
-    TODO: Once the modeling finalizes the architectures (e.g., sequence
-    encoder vs. flattened MLP), expose hooks to return either reshaped sequences
-    with shape [N, lookback, D] or custom aggregations. For now we average
-    embeddings across the lookback window to produce one vector per hour.
+    Build embedding features from row-level news, then align with returns.
     """
-    df = pd.merge(hourly_emb, df_symbol, on="hour", how="inner")
+    df = news_rows.sort_values("newsTimestamp").reset_index(drop=True).copy()
 
     if perf_foresight:
-        df = df[(df["positive"] > 0) | (df["negative"] > 0)].copy()
+        df = df[(df["pos_count"] > 0) | (df["neg_count"] > 0)].copy()
         if df.empty:
             return df, np.empty((0, EMBED_DIM)), np.empty(0)
         print(f"perf_foresight={perf_foresight}: kept {len(df)} rows with positive/negative signals")
 
-    df["embedding"] = df["embedding"].apply(
-        lambda x: np.array(x, dtype=np.float32)
-        if isinstance(x, (list, np.ndarray))
-        else np.zeros(EMBED_DIM, dtype=np.float32)
-    )
-
-    # Compute next-hour returns
-    df = compute_returns(df, horizons)
-
     embeddings = np.stack(df["embedding"].values)
-    y = df["return"].values.astype(np.float32)
+    hours = df["hour"].values
+    timestamps = df["newsTimestamp"].values
 
-    X = _average_lookback_windows(embeddings, lookback)
-    y_aligned = _align_targets(y, lookback)
+    X, lookback_hours = _average_lookback_windows(embeddings, hours, lookback)
+    aligned_ts = []
+    for hr in lookback_hours:
+        idx = np.where(hours == hr)[0]
+        aligned_ts.append(timestamps[idx[-1]])
+    aligned_ts = np.array(aligned_ts)
 
-    df_trimmed = df.iloc[lookback - 1 :].reset_index(drop=True) if lookback > 1 else df
+    price_df = df_symbol.sort_values("hour").copy()
+    price_df = compute_returns(price_df, horizon)
+    price_df["hour"] = pd.to_datetime(price_df["hour"]).dt.tz_localize(None)
+    price_df = price_df[["hour", "return"]]
 
-    return df_trimmed, X, y_aligned
+    merged = pd.DataFrame({"hour": lookback_hours, "newsTimestamp": aligned_ts})
+    merged = merged.merge(price_df, on="hour", how="inner")
+
+    if merged.empty:
+        return merged, np.empty((0, EMBED_DIM)), np.empty(0)
+
+    y = merged["return"].values.astype(np.float32)
+
+    min_len = min(len(X), len(y))
+    X = X[:min_len]
+    y = y[:min_len]
+    merged = merged.iloc[:min_len].reset_index(drop=True)
+
+    return merged, X, y
 
 
 def main():
@@ -105,35 +139,49 @@ def main():
         default=1,
         help="How many hours ahead to predict the return (e.g. --horizon 3)"
     )
+    parser.add_argument(
+        "--lookback",
+        type=int,
+        default=LOOKBACK_HOURS,
+        help="Number of past hours to average embeddings over (default 12)."
+    )
+    parser.add_argument(
+        "--perfect-foresight",
+        action="store_true",
+        help="If set, keep only rows with non-zero sentiment (pos/neg).",
+    )
     args = parser.parse_args()
     horizon = args.horizon
+    lookback = args.lookback
+    perfect_foresight = args.perfect_foresight
 
     if not MARKET_FILE.exists():
         raise FileNotFoundError(f"Clean market parquet not found: {MARKET_FILE}")
-    if not EMB_FILE.exists():
-        raise FileNotFoundError(f"Hourly embeddings not found: {EMB_FILE}")
 
     market = pd.read_parquet(MARKET_FILE)
-    hourly_emb = pd.read_parquet(EMB_FILE)
+    market["hour"] = pd.to_datetime(market["hour"]).dt.tz_localize(None)
 
     symbols = sorted(market["symbol"].unique())
     print(f"✔ Found symbols: {symbols}")
 
     all_X, all_y = [], []
     records = []
-    
-    perfect_foresight = True
 
     for symbol in symbols:
         print(f"\n--- Processing {symbol} ---")
 
         df_symbol = market[market["symbol"] == symbol].copy()
+        try:
+            news_rows = load_embeddings_for_symbol(symbol)
+        except FileNotFoundError:
+            print(f"   {symbol}: no embedding file found, skipping.")
+            continue
 
         df_feat, X, y = build_features_for_symbol(
             df_symbol,
-            hourly_emb,
+            news_rows,
             horizon,
-            lookback=LOOKBACK_HOURS,
+            lookback=lookback,
             perf_foresight=perfect_foresight
         )
 

@@ -6,9 +6,9 @@ from transformers import AutoTokenizer, AutoModel
 import numpy as np
 
 INPUT_FILE = Path("output/data/clean_news.parquet")
+MARKET_FILE = Path("output/data/clean_market.parquet")
 OUTPUT_DIR = Path("output/embeddings")
 OUTPUT_DIR.mkdir(exist_ok=True)
-OUTPUT_FILE = OUTPUT_DIR / "hourly_embeddings.parquet"
 
 MODEL_NAME = "ProsusAI/finbert"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -32,56 +32,68 @@ def get_sentence_embedding(text, tokenizer, model):
         normalized,
         truncation=True,
         max_length=512,
-        return_tensors="pt"
+        return_tensors="pt",
     ).to(DEVICE)
 
     with torch.no_grad():
         outputs = model(**inputs)
         hidden = outputs.last_hidden_state  # [1, T, H]
-        cls_embeddings = hidden[:, 0, :]     # [1, H]
+        cls_embeddings = hidden[:, 0, :]  # [1, H]
 
     embedding = cls_embeddings.squeeze(0).cpu().numpy()
     return embedding.astype(np.float32)
 
 
-def aggregate_news(df: pd.DataFrame) -> pd.DataFrame:
-    agg = (
-        df.groupby("hour")
-        .agg({
-            "text": lambda s: " ".join(s),
-            "positive": "sum",
-            "negative": "sum",
-        })
-        .rename(columns={"text": "news_text"})
-        .reset_index()
-    )
-    return agg
+def explode_news(news_df: pd.DataFrame) -> pd.DataFrame:
+    df = news_df.explode("symbol_tags").rename(columns={"symbol_tags": "symbol"})
+    df = df.dropna(subset=["symbol"])
+    df["symbol"] = df["symbol"].astype(str).str.upper()
+    return df
 
 
 def main():
-    print("\n=== Generating Embeddings ===")
+    print("\n=== Generating row-level embeddings ===")
 
     if not INPUT_FILE.exists():
         raise FileNotFoundError(f"Clean news parquet not found: {INPUT_FILE}")
+    if not MARKET_FILE.exists():
+        raise FileNotFoundError(f"Clean market parquet not found: {MARKET_FILE}")
 
-    df = pd.read_parquet(INPUT_FILE)
-    print(f"Loaded clean news: {df.shape}")
-    agg_news = aggregate_news(df)
-    print(f"Aggregated into {len(agg_news)} hourly rows")
+    news = pd.read_parquet(INPUT_FILE)
+    market = pd.read_parquet(MARKET_FILE)
+    market_symbols = sorted(market["symbol"].unique())
+
+    news_expanded = explode_news(news)
+    news_expanded = news_expanded[news_expanded["symbol"].isin(market_symbols)]
+    print(f"Found {len(market_symbols)} symbols with market data.")
 
     tokenizer, model = load_model()
 
-    embeddings = []
-    for _, row in tqdm(agg_news.iterrows(), total=len(agg_news)):
-        emb = get_sentence_embedding(row["news_text"], tokenizer, model)
-        embeddings.append(emb.tolist())
+    for symbol in market_symbols:
+        symbol_rows = news_expanded[news_expanded["symbol"] == symbol].copy()
+        if symbol_rows.empty:
+            print(f"Skipping {symbol}: no tagged news.")
+            continue
 
-    agg_news["embedding"] = embeddings
-    agg_news.to_parquet(OUTPUT_FILE)
-    print(f"Saved hourly embeddings → {OUTPUT_FILE}")
+        symbol_rows = symbol_rows.sort_values("newsTimestamp").reset_index(drop=True)
+        embeddings = []
+        for _, row in tqdm(
+            symbol_rows.iterrows(), total=len(symbol_rows), desc=f"{symbol} embeddings"
+        ):
+            emb = get_sentence_embedding(row["text"], tokenizer, model)
+            embeddings.append(emb.tolist())
+
+        out_df = symbol_rows[
+            ["newsTimestamp", "hour", "text", "positive", "negative", "symbol"]
+        ].copy()
+        out_df["embedding"] = embeddings
+
+        out_path = OUTPUT_DIR / f"{symbol}_embeddings.parquet"
+        out_df.to_parquet(out_path)
+        print(f"Saved {symbol} embeddings → {out_path}")
+
     print("\nEmbedding pipeline finished!")
 
 
 if __name__ == "__main__":
     main()
-

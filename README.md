@@ -69,10 +69,10 @@ python scripts/preprocess.py
 Inputs: `data/BTC_USD_hourly.parquet` (or directory of parquet files) and `data/cryptopanic_news.csv`.  
 Outputs (stored under `output/data/`):
 
-- `output/data/clean_news.parquet` – cleaned headlines with hourly timestamps  
+- `output/data/clean_news.parquet` – cleaned per-row headlines with original timestamps + symbol tags  
 - `output/data/clean_market.parquet` – normalized OHLCV per symbol
 
-> ⚠️ Temporary assumption: every headline is attributed to BTC while the spaCy-based asset-tagging module is under development. Update `align_news_to_market` once multi-asset tagging is ready so each `(symbol, hour)` receives only its own news texts.
+> ⚠️ Temporary assumption: symbol tagging is keyword-based; refine it later if you add a dedicated NER model.
 
 ## 2. Embedding generation
 
@@ -80,7 +80,7 @@ Outputs (stored under `output/data/`):
 python scripts/embedding.py
 ```
 
-Reads `output/data/clean_news.parquet`, aggregates headlines per hour, and runs FinBERT (configurable via `MODEL_NAME`). Saves `output/embeddings/hourly_embeddings.parquet`, which holds one embedding vector per hour (plus sentiment counts).
+Reads `output/data/clean_news.parquet` and `output/data/clean_market.parquet`, aligns headlines to detected symbols, and only generates embeddings for symbol/hour pairs that actually have tagged news. Each symbol receives its own `output/embeddings/<SYMBOL>_embeddings.parquet` file containing one embedding vector per hour plus sentiment counts.
 
 ## 3. Feature building
 
@@ -88,7 +88,7 @@ Reads `output/data/clean_news.parquet`, aggregates headlines per hour, and runs 
 python scripts/build_features.py
 ```
 
-Merges `output/data/clean_market.parquet` with `output/embeddings/hourly_embeddings.parquet`, computes next-hour returns, and averages embeddings over a configurable lookback window (default 12 hours). Outputs:
+Loads `output/data/clean_market.parquet` and the per-symbol embedding files from `output/embeddings/`, merges them on `(symbol, hour)`, computes next-hour returns, and averages embeddings over a configurable lookback window (default 12 hours, configurable via `--lookback`). Outputs:
 
 - `output/features/X.npy` – averaged embedding features
 - `output/features/y.npy` – aligned next-hour returns

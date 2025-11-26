@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import matplotlib.pyplot as plt
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, Tuple
@@ -213,6 +214,26 @@ def simulate_trading_strategy(
     )
 
 
+def plot_strategy_curves(subset_name, positions, returns, timestamps, output_dir):
+    if len(positions) == 0:
+        return
+    x = pd.to_datetime(timestamps)
+    fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+    axes[0].step(x, positions, where='post')
+    axes[0].set_ylabel('Position')
+    axes[0].set_title(f"{subset_name} positions")
+    cum_returns = np.cumsum(returns)
+    axes[1].plot(x, cum_returns)
+    axes[1].set_ylabel('Cumulative Return')
+    axes[1].set_xlabel('Time')
+    axes[1].set_title(f"{subset_name} cumulative return")
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig_path = output_dir / f"strategy_{subset_name}.png"
+    fig.savefig(fig_path)
+    plt.close(fig)
+
+
 def evaluate_predictions(
     preds_path: Path,
     signal_threshold: float,
@@ -229,20 +250,30 @@ def evaluate_predictions(
 
     regression = compute_regression_metrics(y_true, y_pred)
     strategy = simulate_trading_strategy(y_true, y_pred, threshold=signal_threshold)
-
     subset_metrics = {}
     if "subset" in df.columns:
+        subset_figs = []
         for subset_name in sorted(df["subset"].dropna().unique()):
             mask = df["subset"] == subset_name
             if not mask.any():
                 continue
             reg = compute_regression_metrics(y_true[mask], y_pred[mask])
             strat = simulate_trading_strategy(y_true[mask], y_pred[mask], threshold=signal_threshold)
+            positions = np.where(
+                y_pred[mask] >= signal_threshold,
+                1,
+                np.where(y_pred[mask] <= -signal_threshold, -1, 0),
+            )
+            returns = positions * y_true[mask]
+            timestamps = df.loc[mask, 'timestamp'].to_numpy() if 'timestamp' in df.columns else df.loc[mask].index.to_numpy()
+            subset_figs.append((subset_name, positions, returns, timestamps))
             subset_metrics[subset_name] = {
                 "regression_metrics": to_native_dict(asdict(reg)),
                 "strategy_metrics": to_native_dict(asdict(strat)),
                 "num_samples": int(mask.sum()),
             }
+        for subset_name, positions, returns, timestamps in subset_figs:
+            plot_strategy_curves(subset_name, positions, returns, timestamps, PRED_DIR)
 
     if subset_metrics:
         return {"subset_metrics": subset_metrics}
@@ -262,9 +293,27 @@ def linear_regression_report(
 
     preds = train_linear_baseline(X_train, y_train, X_test)
 
+    dataset_path = FEATURE_DIR / "dataset.parquet"
+    test_timestamps = None
+    if dataset_path.exists():
+        dataset = pd.read_parquet(dataset_path)
+        if len(dataset) == len(y):
+            hours = pd.to_datetime(dataset["hour"]).dt.tz_localize(None).to_numpy()
+            test_timestamps = hours[len(X_train) :]
+
     regression = compute_regression_metrics(y_test, preds)
     threshold = compute_signal_threshold(y_train, signal_percentile)
     strategy = simulate_trading_strategy(y_test, preds, threshold)
+
+    positions = np.where(
+        preds >= threshold,
+        1,
+        np.where(preds <= -threshold, -1, 0),
+    )
+    returns = positions * y_test
+    if test_timestamps is None or len(test_timestamps) != len(positions):
+        test_timestamps = np.arange(len(positions))
+    plot_strategy_curves("baseline_test", positions, returns, test_timestamps, REPORT_DIR)
 
     return {
         "regression_metrics": to_native_dict(asdict(regression)),
