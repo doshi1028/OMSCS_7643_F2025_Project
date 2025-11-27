@@ -64,17 +64,25 @@ def run_predict(args):
     seq_len      = args.seq_len
     batch_size   = args.batch_size
     seed         = args.seed
-    train_split  = args.train_split
+    cutoff_date  = pd.to_datetime(args.cutoff_date)
     
     print("\n=== Loading dataset for inference ===")
 
     X = np.load(FEATURE_DIR / "X.npy")
     y = np.load(FEATURE_DIR / "y.npy")  # Only for evaluation, not required
+    meta_path = FEATURE_DIR / "dataset.parquet"
+    if not meta_path.exists():
+        raise FileNotFoundError("dataset.parquet not found under output/features/")
+    meta = pd.read_parquet(meta_path)
+    timestamps = pd.to_datetime(meta["hour"]).dt.tz_localize(None).to_numpy()
+    if len(timestamps) != len(X):
+        raise ValueError("dataset metadata rows do not match feature rows")
 
     # Handle sequence data
     if seq_len > 1:
         print(f"Using sequence length = {seq_len}")
         y = y[seq_len - 1 :]   # align y with last element in each sequence
+        timestamps = timestamps[seq_len - 1 :]
 
     dataset = CryptoDataset(X, seq_len=seq_len)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
@@ -118,16 +126,20 @@ def run_predict(args):
 
     preds = predict(model, loader, device)
 
-    total = len(y[: len(preds)])
-    split_idx = int(total * train_split)
-    split_idx = max(0, min(split_idx, total))
-    subset = np.array(["train"] * split_idx + ["test"] * (total - split_idx))
+    valid_len = len(preds)
+    timestamps = timestamps[:valid_len]
+    subset = np.where(
+        timestamps < cutoff_date,
+        "train",
+        "holdout",
+    )
 
     print("\n=== Building results table ===")
     df = pd.DataFrame({
         "pred": preds,
         "target": y[:len(preds)],
-        "subset": subset
+        "subset": subset,
+        "timestamp": timestamps
     })
 
     out_fp = PRED_DIR / f"predictions_{model_name}.csv"
@@ -151,8 +163,8 @@ if __name__ == "__main__":
     parser.add_argument("--seq_len", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--train_split", type=float, default=0.8,
-                    help="Fraction of chronological samples considered in-sample.")
+    parser.add_argument("--cutoff_date", type=str, default="2024-10-01",
+                        help="Dates before this belong to the training subset; later dates form the holdout.")
 
     args = parser.parse_args()
 

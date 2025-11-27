@@ -1,5 +1,6 @@
 import argparse
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -126,6 +127,20 @@ def train(args):
     set_seed(seed) 
     X = np.load(FEATURE_DIR / "X.npy")
     y = np.load(FEATURE_DIR / "y.npy")
+    meta_path = FEATURE_DIR / "dataset.parquet"
+    if not meta_path.exists():
+        raise FileNotFoundError("dataset.parquet not found under output/features/")
+    meta = pd.read_parquet(meta_path)
+    hours = pd.to_datetime(meta["hour"]).dt.tz_localize(None).to_numpy()
+    if len(hours) != len(X):
+        raise ValueError("dataset metadata rows do not match feature rows")
+    cutoff = pd.to_datetime(args.train_end_date)
+    mask = hours < cutoff
+    if not mask.any():
+        raise ValueError(f"No samples before cutoff {args.train_end_date}")
+    X = X[mask]
+    y = y[mask]
+    hours = hours[mask]
 
     input_dim = X.shape[1]
 
@@ -297,6 +312,8 @@ if __name__ == "__main__":
     parser.add_argument("--warmup_pct", type=float, default=0.1)
     parser.add_argument("--ema_decay", type=float, default=None)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--train_end_date", type=str, default="2024-10-01",
+                        help="Use samples strictly before this date for training/validation (YYYY-MM-DD).")
     parser.add_argument("--num_layers", type=int, default=2)
 
     # ---- model-specific arguments ----

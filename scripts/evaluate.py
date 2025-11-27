@@ -34,6 +34,8 @@ PRED_DIR = Path("output/predictions")
 REPORT_DIR = Path("output/reports")
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
+CUTOFF_DEFAULT = "2024-10-01"
+
 # Annualization factor for Sharpe ratio when working with hourly returns.
 HOURS_PER_YEAR = 24 * 365
 
@@ -89,6 +91,15 @@ def load_feature_arrays() -> Tuple[np.ndarray, np.ndarray]:
     X = np.load(X_path)
     y = np.load(y_path)
     return X, y
+
+
+def load_metadata_hours() -> np.ndarray:
+    meta_path = FEATURE_DIR / "dataset.parquet"
+    if not meta_path.exists():
+        raise FileNotFoundError("dataset.parquet not found under output/features/")
+    meta = pd.read_parquet(meta_path)
+    hours = pd.to_datetime(meta["hour"]).dt.tz_localize(None).to_numpy()
+    return hours
 
 
 def chronological_split(
@@ -250,6 +261,7 @@ def evaluate_predictions(
 
     regression = compute_regression_metrics(y_true, y_pred)
     strategy = simulate_trading_strategy(y_true, y_pred, threshold=signal_threshold)
+
     subset_metrics = {}
     if "subset" in df.columns:
         subset_figs = []
@@ -285,21 +297,30 @@ def evaluate_predictions(
 
 
 def linear_regression_report(
-    holdout_fraction: float,
+    cutoff_date: str,
+    pretest_fraction: float,
     signal_percentile: float,
 ) -> Dict[str, Dict]:
     X, y = load_feature_arrays()
-    X_train, X_test, y_train, y_test = chronological_split(X, y, holdout_fraction)
+    hours = load_metadata_hours()
+    if len(hours) != len(X):
+        raise ValueError("dataset metadata rows do not match feature rows")
+
+    cutoff_ts = pd.to_datetime(cutoff_date)
+    pre_mask = hours < cutoff_ts
+    if pre_mask.sum() < 2:
+        raise ValueError("Not enough samples before cutoff to split train/test.")
+
+    X_pre, y_pre = X[pre_mask], y[pre_mask]
+    hours_pre = hours[pre_mask]
+
+    X_train, X_test, y_train, y_test = chronological_split(
+        X_pre, y_pre, pretest_fraction
+    )
+    split_idx = len(X_train)
+    test_hours = hours_pre[split_idx : split_idx + len(y_test)]
 
     preds = train_linear_baseline(X_train, y_train, X_test)
-
-    dataset_path = FEATURE_DIR / "dataset.parquet"
-    test_timestamps = None
-    if dataset_path.exists():
-        dataset = pd.read_parquet(dataset_path)
-        if len(dataset) == len(y):
-            hours = pd.to_datetime(dataset["hour"]).dt.tz_localize(None).to_numpy()
-            test_timestamps = hours[len(X_train) :]
 
     regression = compute_regression_metrics(y_test, preds)
     threshold = compute_signal_threshold(y_train, signal_percentile)
@@ -311,9 +332,7 @@ def linear_regression_report(
         np.where(preds <= -threshold, -1, 0),
     )
     returns = positions * y_test
-    if test_timestamps is None or len(test_timestamps) != len(positions):
-        test_timestamps = np.arange(len(positions))
-    plot_strategy_curves("baseline_test", positions, returns, test_timestamps, REPORT_DIR)
+    plot_strategy_curves("baseline_pretest", positions, returns, test_hours, REPORT_DIR)
 
     return {
         "regression_metrics": to_native_dict(asdict(regression)),
@@ -340,10 +359,16 @@ def main() -> None:
         help="Optional CSV (with 'pred' and 'target') from scripts/predict.py.",
     )
     parser.add_argument(
-        "--holdout",
+        "--cutoff-date",
+        type=str,
+        default=CUTOFF_DEFAULT,
+        help="Date separating training from holdout evaluations (YYYY-MM-DD).",
+    )
+    parser.add_argument(
+        "--pretest-fraction",
         type=float,
         default=0.2,
-        help="Fraction of the feature dataset reserved for testing the linear baseline.",
+        help="Fraction of pre-cutoff data reserved for testing the baseline.",
     )
     parser.add_argument(
         "--signal-percentile",
@@ -362,7 +387,8 @@ def main() -> None:
 
     print("\n=== Linear regression baseline ===")
     baseline = linear_regression_report(
-        holdout_fraction=args.holdout,
+        cutoff_date=args.cutoff_date,
+        pretest_fraction=args.pretest_fraction,
         signal_percentile=args.signal_percentile,
     )
 
