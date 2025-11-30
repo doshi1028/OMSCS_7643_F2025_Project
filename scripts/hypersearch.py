@@ -116,7 +116,7 @@ def get_search_space(mode="full"):
 
             # Feature CHOICE
             "lookback_mode": ["mean", "max", "volume", "exp_decay", "attn"],
-            "horizon": [1, 3],
+            "horizon": [1],
             "lookback": [6, 12, 24, 48],
 
             # =======================================
@@ -124,7 +124,7 @@ def get_search_space(mode="full"):
             # =======================================
             "model": ["mlp", "lstm", "gru", "transformer"],
 
-            "seq_len": [1, 4, 8, 12],
+            "seq_len": [1, 4, 8, 12, 24, 48, 120, 168, 336, 480, 720],
 
             # =======================================
             #  Optimization
@@ -273,6 +273,7 @@ class SingleRunExecutor:
     def build_eval_cmd(self, pred_csv):
         cmd = [
             "python", str(EVAL_PY),
+            "--include-holdout",
             "--predictions", str(pred_csv)
         ]
         return cmd
@@ -356,7 +357,8 @@ class SingleRunExecutor:
         # ===========================
         model_pred = metrics.get("model_predictions", {})
         subsets = model_pred.get("subset_metrics", {})
-        holdout = subsets.get("holdout", {})
+        # holdout = subsets.get("holdout", {})
+        holdout = subsets.get("test", {})
 
         reg = holdout.get("regression_metrics", {})
         strat = holdout.get("strategy_metrics", {})

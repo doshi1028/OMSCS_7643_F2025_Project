@@ -110,7 +110,7 @@ def _average_lookback_windows(
         # ------------ exponential decay ------------
         elif mode == "exp_decay":
             hour_vectors = []
-            import pdb; pdb.set_trace()
+            # import pdb; pdb.set_trace()
             for hr in hrs:
                 vecs = np.stack(hour_to_vectors[hr], axis=0)
                 ts = pd.to_datetime(hour_to_ts[hr])

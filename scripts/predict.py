@@ -138,6 +138,10 @@ def run_predict(args):
         pre_train_count = max(0, min(pre_train_count, pre_count))
         subset[:pre_train_count] = "train"
         subset[pre_train_count:pre_count] = "test"
+    
+    print("valid_len:", valid_len)
+    print("pre_count:", pre_count)
+    print("pre_train_count:", pre_train_count)
 
     print("\n=== Building results table ===")
     df = pd.DataFrame({
