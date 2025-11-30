@@ -128,11 +128,16 @@ def run_predict(args):
 
     valid_len = len(preds)
     timestamps = timestamps[:valid_len]
-    subset = np.where(
-        timestamps < cutoff_date,
-        "train",
-        "holdout",
-    )
+
+    # pre-cutoff split mirrors the train/val split used during training (default 80/20)
+    pre_mask = timestamps < cutoff_date
+    pre_count = int(pre_mask.sum())
+    subset = np.full(valid_len, "holdout", dtype=object)
+    if pre_count > 0:
+        pre_train_count = int(pre_count * args.pretest_fraction)
+        pre_train_count = max(0, min(pre_train_count, pre_count))
+        subset[:pre_train_count] = "train"
+        subset[pre_train_count:pre_count] = "test"
 
     print("\n=== Building results table ===")
     df = pd.DataFrame({
@@ -165,6 +170,8 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cutoff_date", type=str, default="2024-10-01",
                         help="Dates before this belong to the training subset; later dates form the holdout.")
+    parser.add_argument("--pretest_fraction", type=float, default=0.8,
+                        help="Fraction of pre-cutoff samples treated as training; rest become pre-test.")
 
     args = parser.parse_args()
 

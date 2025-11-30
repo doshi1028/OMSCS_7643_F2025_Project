@@ -23,7 +23,7 @@ def load_embeddings_for_symbol(symbol: str) -> pd.DataFrame:
     df["pos_count"] = df["positive"]
     df["neg_count"] = df["negative"]
 
-    df["hour"] = pd.to_datetime(df["hour"]).dt.tz_localize(None)
+    df["hour"] = pd.to_datetime(df["hour"]).dt.ceil("H").dt.tz_localize(None)
     df["newsTimestamp"] = pd.to_datetime(df["newsTimestamp"]).dt.tz_localize(None)
 
     return df[["hour", "embedding", "pos_count", "neg_count", "newsTimestamp"]]
@@ -175,8 +175,7 @@ def build_features_for_symbol(
     for hr in lookback_hours:
         idx = np.where(hours == hr)[0]
         aligned_ts.append(timestamps[idx[-1]])
-    aligned_ts = np.array(aligned_ts)
-
+    
     price_df = df_symbol.sort_values("hour").copy()
     price_df = compute_returns(price_df, horizon)
     price_df["hour"] = pd.to_datetime(price_df["hour"]).dt.tz_localize(None)

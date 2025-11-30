@@ -109,10 +109,11 @@ Saves the best checkpoint to `output/models/<model>_best.pt`.
 ## 5. Prediction
 
 ```
-python scripts/predict.py --model lr --seq_len 1 --cutoff_date 2024-10-01
+python scripts/predict.py --model lr --seq_len 1 --cutoff_date 2024-10-01 \
+    --pretest_fraction 0.8
 ```
 
-Loads the trained checkpoint and produces `output/predictions/predictions_<model>.csv` containing `pred` (forecasted next-hour return), `target` (realized return), the associated `timestamp`, and `subset` labels (`train` vs `holdout`, based on the cutoff date). Sequence lengths >1 reuse the same label alignment logic as training.
+Loads the trained checkpoint and produces `output/predictions/predictions_<model>.csv` containing `pred` (forecasted next-hour return), `target` (realized return), the associated `timestamp`, and `subset` labels (`train`/`test` for pre-cutoff samples according to `--pretest_fraction`, `holdout` for post-cutoff samples). Sequence lengths >1 reuse the same label alignment logic as training.
 
 ## 6. Performance evaluation
 
@@ -124,12 +125,12 @@ python scripts/evaluate.py --cutoff-date 2024-10-01 \
 
 The evaluator:
 
-1. Fits the **linear regression baseline** on data strictly before the cutoff date, splitting that pre-cutoff segment chronologically (default 80/20) so the baseline test metrics reflect unseen-but-pre-cutoff data. The post-cutoff window remains untouched for final holdout evaluation.
-2. If `--predictions` is provided, scores that CSV (any downstream model). When a `subset` column exists, only the `train`/`holdout` metrics are reported for that file (no full-sample aggregate).
+1. Fits the **linear regression baseline** on data strictly before the cutoff date, splitting that pre-cutoff segment chronologically (default 80/20) so the baseline test metrics reflect unseen-but-pre-cutoff data. The post-cutoff window remains untouched for final holdout evaluation unless `--include-holdout` is passed.
+2. If `--predictions` is provided, scores that CSV (any downstream model). When a `subset` column exists, only the `train`/`test` metrics are reported unless `--include-holdout` is specified.
 3. Reports regression metrics (MSE, RMSE, MAE, MAPE, R², directional accuracy, Pearson/Spearman information coefficients, up/down precision & recall).
 4. Runs a naive long/flat/short backtest by thresholding predicted returns (threshold learned from the baseline’s training split).
 
-Results are saved to `output/reports/performance_report.json`, and timestamped strategy plots are written alongside the JSON.
+Add `--include-holdout` to include post-cutoff performance in both the baseline and prediction metrics. Results are saved to `output/reports/performance_report.json`, and timestamped strategy plots are written alongside the JSON.
 
 ### Holdout-only validation
 

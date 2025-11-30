@@ -248,6 +248,7 @@ def plot_strategy_curves(subset_name, positions, returns, timestamps, output_dir
 def evaluate_predictions(
     preds_path: Path,
     signal_threshold: float,
+    include_holdout: bool,
 ) -> Dict[str, Dict]:
     if not preds_path.exists():
         raise FileNotFoundError(f"Prediction file not found: {preds_path}")
@@ -261,11 +262,16 @@ def evaluate_predictions(
 
     regression = compute_regression_metrics(y_true, y_pred)
     strategy = simulate_trading_strategy(y_true, y_pred, threshold=signal_threshold)
-
+    
     subset_metrics = {}
     if "subset" in df.columns:
         subset_figs = []
+        allowed_subsets = ["train", "test"]
+        if include_holdout:
+            allowed_subsets.append("holdout")
         for subset_name in sorted(df["subset"].dropna().unique()):
+            if subset_name not in allowed_subsets:
+                continue
             mask = df["subset"] == subset_name
             if not mask.any():
                 continue
@@ -300,6 +306,7 @@ def linear_regression_report(
     cutoff_date: str,
     pretest_fraction: float,
     signal_percentile: float,
+    include_holdout: bool = False,
 ) -> Dict[str, Dict]:
     X, y = load_feature_arrays()
     hours = load_metadata_hours()
@@ -308,11 +315,14 @@ def linear_regression_report(
 
     cutoff_ts = pd.to_datetime(cutoff_date)
     pre_mask = hours < cutoff_ts
+    holdout_mask = hours >= cutoff_ts
     if pre_mask.sum() < 2:
         raise ValueError("Not enough samples before cutoff to split train/test.")
 
     X_pre, y_pre = X[pre_mask], y[pre_mask]
     hours_pre = hours[pre_mask]
+    X_holdout, y_holdout = X[holdout_mask], y[holdout_mask]
+    holdout_hours = hours[holdout_mask]
 
     X_train, X_test, y_train, y_test = chronological_split(
         X_pre, y_pre, pretest_fraction
@@ -334,11 +344,35 @@ def linear_regression_report(
     returns = positions * y_test
     plot_strategy_curves("baseline_pretest", positions, returns, test_hours, REPORT_DIR)
 
-    return {
+    result = {
         "regression_metrics": to_native_dict(asdict(regression)),
         "strategy_metrics": to_native_dict(asdict(strategy)),
         "threshold": float(threshold),
     }
+
+    if include_holdout and len(X_holdout) > 0:
+        holdout_preds = train_linear_baseline(X_train, y_train, X_holdout)
+        holdout_reg = compute_regression_metrics(y_holdout, holdout_preds)
+        holdout_strat = simulate_trading_strategy(y_holdout, holdout_preds, threshold)
+        holdout_positions = np.where(
+            holdout_preds >= threshold,
+            1,
+            np.where(holdout_preds <= -threshold, -1, 0),
+        )
+        holdout_returns = holdout_positions * y_holdout
+        plot_strategy_curves(
+            "baseline_holdout",
+            holdout_positions,
+            holdout_returns,
+            holdout_hours[: len(holdout_positions)],
+            REPORT_DIR,
+        )
+        result["holdout_metrics"] = {
+            "regression_metrics": to_native_dict(asdict(holdout_reg)),
+            "strategy_metrics": to_native_dict(asdict(holdout_strat)),
+        }
+
+    return result
 
 
 def save_report(report: Dict, output_file: Path) -> None:
@@ -371,6 +405,11 @@ def main() -> None:
         help="Fraction of pre-cutoff data reserved for testing the baseline.",
     )
     parser.add_argument(
+        "--include-holdout",
+        action="store_true",
+        help="Include holdout subset metrics when evaluating predictions/baseline.",
+    )
+    parser.add_argument(
         "--signal-percentile",
         type=float,
         default=50.0,
@@ -390,6 +429,7 @@ def main() -> None:
         cutoff_date=args.cutoff_date,
         pretest_fraction=args.pretest_fraction,
         signal_percentile=args.signal_percentile,
+        include_holdout=args.include_holdout,
     )
 
     if args.predictions is not None:
@@ -397,6 +437,7 @@ def main() -> None:
         prediction_eval = evaluate_predictions(
             preds_path=args.predictions,
             signal_threshold=baseline["threshold"],
+            include_holdout=args.include_holdout
         )
     else:
         print("No prediction file supplied; skipping model comparison.")
