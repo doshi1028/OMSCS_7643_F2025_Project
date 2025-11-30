@@ -142,6 +142,15 @@ python scripts/test_holdout.py --model lr --seq_len 1 --cutoff_date 2024-10-01
 
 This script reloads the saved model, scores all post-cutoff samples, prints regression/strategy metrics, and stores the holdout strategy plots under `output/reports/`.
 
+### Latent factor inspection
+
+```
+python scripts/latent_inspection.py --symbol BTC --topics 25 --pca-components 10 \
+    --run-transformer --seq-len 1 --horizon 1
+```
+
+This helper fits BERTopic on the per-row embeddings, summarizes each topic’s keywords, runs PCA on the embedding space, and highlights the headlines driving the top principal components. When `--run-transformer` is supplied, it also trains the existing transformer regressor on the hourly PCA features to gauge how well those latent factors explain next-hour returns.
+
 # FinBERT embedding proof of concept
 
 ```
