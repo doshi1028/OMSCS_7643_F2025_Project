@@ -77,7 +77,6 @@ def next_run_id():
     return int(last) + 1
 
 
-
 # ============================================================
 #   2. SEARCH SPACE DEFINITION (FULL, QUICK, CUSTOM)
 # ============================================================
@@ -114,36 +113,74 @@ def get_search_space(mode="full"):
     # ======================================================
     if mode == "full":
         return {
-            # Model choice
+
+            # Feature CHOICE
+            "lookback_mode": ["mean", "max", "volume", "exp_decay", "attn"],
+            "horizon": [1, 3],
+            "lookback": [6, 12, 24, 48],
+
+            # =======================================
+            #  Model choice
+            # =======================================
             "model": ["mlp", "lstm", "gru", "transformer"],
 
-            # Time-series related
             "seq_len": [1, 4, 8, 12],
 
-            # Optimization
+            # =======================================
+            #  Optimization
+            # =======================================
             "batch_size": [32, 64, 128],
-            "lr": [1e-4, 3e-4, 1e-5],
+
+            # Learning rate 
+            "lr": [1e-5, 3e-5, 1e-4, 3e-4, 1e-3],
+
+            # epochs
             "epochs": [15, 30],
-            "weight_decay": [0.0, 1e-4, 1e-5],
+
+            # weight decay
+            "weight_decay": [0.0, 1e-5, 1e-4],
+
+            # warmup + cosine scheduler
             "scheduler": [None, "cosine_warmup"],
             "warmup_pct": [0.05, 0.1],
 
-            # EMA
-            "ema_decay": [None, 0.995, 0.999],
+            # grad clip
+            "grad_clip": [None, 1.0, 5.0],
 
-            # MLP
-            "hidden_dim": [128, 256, 512],
+            "ema_decay": [None],
 
-            # LSTM
-            "lstm_proj_dim": [64, 128],
+            # =======================================
+            #  MLP
+            # =======================================
+            "hidden_dim": [128, 256, 512, 768],
+            "dropout": [0.1, 0.2],
 
-            # Transformer
-            "tf_d_model": [128, 256],
+            # =======================================
+            #  LSTM
+            # =======================================
+            "num_layers": [1, 2, 3],
+            "lstm_proj_dim": [32, 64, 128, 256],
+            "lstm_use_layernorm": [0, 1],
+            "lstm_use_attention": [0, 1],
+
+            # =======================================
+            #  GRU
+            # =======================================
+
+            # =======================================
+            #  Transformer
+            # =======================================
+            "tf_d_model": [128, 256, 384, 512],
             "tf_heads": [2, 4, 8],
             "tf_layers": [2, 4],
-            "tf_ff_dim": [256, 512],
-            "tf_pool": ["attention", "cls"],   # mean & last usually worse
+            "tf_ff_dim": [256, 512, 1024],
+            "tf_pool": ["attention", "cls"],
             "tf_dropout": [0.1, 0.2],
+            "tf_learnable_pos": [0, 1],
+            "tf_use_cls_token": [0, 1],
+            "tf_embed_scale": [0.01, 0.1, 1.0]
+          
+
         }
 
     # ======================================================
@@ -163,6 +200,19 @@ class SingleRunExecutor:
         self.run_dir = run_dir
         self.config = config
         self.log_path = run_dir / "log.txt"
+
+    def rebuild_features(self):
+      cfg = self.config
+      cmd = [
+          "python", str(SCRIPTS_DIR / "build_features.py"),
+          "--horizon", str(cfg["horizon"]),
+          "--lookback", str(cfg["lookback"]),
+          "--lookback-mode", cfg["lookback_mode"],
+      ]
+
+      write_log(self.log_path, f"Rebuilding features with: {cmd}")
+      subprocess.run(cmd, check=True)
+
 
     # --------------------------------------------------------
     # Build train.py command line args
@@ -248,7 +298,9 @@ class SingleRunExecutor:
     # --------------------------------------------------------
     def execute(self):
         write_log(self.log_path, f"=== RUN START {timestamp()} ===")
-
+        # STEP 0: rebuild features
+        self.rebuild_features()
+        print('New features built')
         # Save config
         save_json(self.config, self.run_dir / "config.json")
 
@@ -445,6 +497,9 @@ class HyperSearch:
             if len(values) == 0:
                 continue
             cfg[k] = random.choice(values)
+
+        if cfg["model"] == "mlp":
+            cfg["seq_len"] = 1
 
         # default cutoff_date for predict
         cfg["cutoff_date"] = "2024-10-01"
