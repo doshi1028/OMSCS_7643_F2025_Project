@@ -24,9 +24,14 @@ def load_embeddings_for_symbol(symbol: str) -> pd.DataFrame:
     df["neg_count"] = df["negative"]
 
     df["hour"] = pd.to_datetime(df["hour"]).dt.ceil("H").dt.tz_localize(None)
-    df["newsTimestamp"] = pd.to_datetime(df["newsTimestamp"]).dt.round('min').dt.tz_localize(None)
+    df["newsTimestamp"] = (
+        pd.to_datetime(df["newsTimestamp"]).dt.round("min").dt.tz_localize(None)
+    )
+    df["minutes_to_hour"] = (
+        (df["hour"] - df["newsTimestamp"]).dt.total_seconds() / 60.0
+    ).astype(np.float32)
 
-    return df[["hour", "embedding", "pos_count", "neg_count", "newsTimestamp"]]
+    return df[["hour", "embedding", "pos_count", "neg_count", "newsTimestamp", "minutes_to_hour"]]
 
 
 
@@ -45,11 +50,14 @@ def compute_returns(df, horizon):
 
 
 def _average_lookback_windows(
-        vectors, hours, lookback,
-        mode="mean",
-        hour_volume_map=None,
-        decay_alpha=0.8,
-        timestamps=None,
+    vectors,
+    hours,
+    lookback,
+    mode="mean",
+    hour_volume_map=None,
+    decay_alpha=0.8,
+    timestamps=None,
+    minutes=None,
 ):
     """
     Supported modes:
@@ -67,15 +75,19 @@ def _average_lookback_windows(
     if timestamps is None:
         timestamps = hours
 
+    if minutes is None:
+        minutes = np.zeros_like(hours, dtype=np.float32)
+
     hour_to_vectors = {}
-    hour_to_ts = {}
-    for vec, hr, ts in zip(vectors, hours, timestamps):
+    hour_to_minutes = {}
+    for vec, hr, mins in zip(vectors, hours, minutes):
         hour_to_vectors.setdefault(hr, []).append(vec)
-        hour_to_ts.setdefault(hr, []).append(ts)
+        hour_to_minutes.setdefault(hr, []).append(mins)
 
     ordered_hours = sorted(hour_to_vectors.keys())
-    hour_embeddings = np.array([np.mean(hour_to_vectors[h], axis=0)
-                                for h in ordered_hours])
+    hour_embeddings = np.array([
+        np.mean(hour_to_vectors[h], axis=0) for h in ordered_hours
+    ])
 
     windows = []
     output_hours = []
@@ -110,21 +122,14 @@ def _average_lookback_windows(
         # ------------ exponential decay ------------
         elif mode == "exp_decay":
             hour_vectors = []
-            # import pdb; pdb.set_trace()
             for hr in hrs:
                 vecs = np.stack(hour_to_vectors[hr], axis=0)
-                ts = pd.to_datetime(hour_to_ts[hr])
-                ref = pd.Timestamp(hr)
-                minutes_diff = (ref - ts).total_seconds() / 60.0
-                minutes_diff = np.asarray(minutes_diff, dtype=np.float32)
-                minutes_diff = np.clip(minutes_diff, 0, None)
-                weights = decay_alpha ** minutes_diff
+                mins = np.clip(np.array(hour_to_minutes[hr], dtype=np.float32), 0, None)
+                weights = decay_alpha ** mins
                 weights = np.clip(weights, 1e-8, None)
                 weights = weights / weights.sum()
                 hour_vectors.append((weights[:, None] * vecs).sum(axis=0))
-
-            hour_vectors = np.stack(hour_vectors, axis=0)
-            pooled = hour_vectors.mean(axis=0)
+            pooled = np.stack(hour_vectors, axis=0).mean(axis=0)
 
         # ------------ attention pooling ------------
         elif mode == "attn":
@@ -180,6 +185,7 @@ def build_features_for_symbol(
     embeddings = np.stack(df["embedding"].values)
     hours = df["hour"].values
     timestamps = df["newsTimestamp"].values
+    minutes = df["minutes_to_hour"].values
 
     X, lookback_hours = _average_lookback_windows(
         embeddings,
@@ -187,7 +193,8 @@ def build_features_for_symbol(
         lookback,
         mode=lookback_mode,
         hour_volume_map=hour_volume_map,
-        timestamps=timestamps
+        timestamps=timestamps,
+        minutes=minutes,
     )
 
     aligned_ts = []
