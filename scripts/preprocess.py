@@ -58,8 +58,18 @@ def normalize_text(text):
     # Remove HTML tags
     text = re.sub(r"<.*?>", "", text)
 
+    # Remove Twitter style RT @username:
+    text = re.sub(r"\bRT\s+@\w+:\s*", "", text)
+    
+    # Remove standalone @username (with or without punctuation)
+    text = re.sub(r"@\w+", "", text)
+
     # Remove emojis and other non-text symbols
     text = text.encode("ascii", "ignore").decode()
+
+    # Remove multiple slashes like "4/" or "1/"
+    # Optional — depends on whether you want to keep list numbering
+    text = re.sub(r"\b\d+\/\b", "", text)
 
     # Replace multiple spaces with single space
     text = re.sub(r"\s+", " ", text)
