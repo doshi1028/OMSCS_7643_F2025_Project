@@ -64,6 +64,9 @@ def normalize_text(text):
     # Remove standalone @username (with or without punctuation)
     text = re.sub(r"@\w+", "", text)
 
+    # Remove numbers and percentages
+    text = re.sub(r"\b\d+(\.\d+)?%?", "", text)
+
     # Remove emojis and other non-text symbols
     text = text.encode("ascii", "ignore").decode()
 
