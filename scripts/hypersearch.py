@@ -357,25 +357,40 @@ class SingleRunExecutor:
         # ===========================
         model_pred = metrics.get("model_predictions", {})
         subsets = model_pred.get("subset_metrics", {})
-        # holdout = subsets.get("holdout", {})
-        holdout = subsets.get("test", {})
+        # test set
+        test = subsets.get("test", {})
+        test_reg = test.get("regression_metrics", {})
+        test_strat = test.get("strategy_metrics", {})
 
-        reg = holdout.get("regression_metrics", {})
-        strat = holdout.get("strategy_metrics", {})
+        test_IC = test_reg.get("pearson_ic", None)
+        test_sharpe = test_strat.get("sharpe", None)
 
-        IC = reg.get("pearson_ic", None)
-        sharpe = strat.get("sharpe", None)
+        # holdout set
+        hold = subsets.get("holdout", {})
+        hold_reg = hold.get("regression_metrics", {})
+        hold_strat = hold.get("strategy_metrics", {})
 
-        write_log(self.log_path, f"IC = {IC}, Sharpe = {sharpe}")
+        hold_IC = hold_reg.get("pearson_ic", None)
+        hold_sharpe = hold_strat.get("sharpe", None)
+
+
+        write_log(self.log_path, 
+                  f"Test IC = {test_IC}, Test Sharpe = {test_sharpe}")
+
+        write_log(self.log_path, 
+                  f"Holdout IC = {hold_IC}, Holdout Sharpe = {hold_sharpe}")
 
         return {
-            "IC": IC,
-            "sharpe": sharpe,
+            "IC": test_IC,
+            "sharpe": test_sharpe,
+            "holdout_IC": hold_IC,
+            "holdout_sharpe": hold_sharpe,
             "train_time": train_time,
             "config": self.config,
             "run_dir": self.run_dir,
             "metrics": metrics
         }
+
 # ============================================================
 #   4. SCORING, LOGGING & VISUALIZATION
 # ============================================================
@@ -443,8 +458,10 @@ def update_summary_csv(all_results, save_path):
     for r in all_results:
         row = {
             "run_id": r["run_id"],
-            "IC": r["IC"],
-            "sharpe": r["sharpe"],
+            "IC_test": r["IC"],
+            "Sharpe_test": r["sharpe"],
+            "IC_holdout": r.get("holdout_IC", None),
+            "Sharpe_holdout": r.get("holdout_sharpe", None),
             "score": r["score"]
         }
         # add config parameters
@@ -503,6 +520,14 @@ class HyperSearch:
         if cfg["model"] == "mlp":
             cfg["seq_len"] = 1
 
+        # force seq_len > 1 for sequence models
+        if cfg["model"] in ["transformer", "lstm", "gru"]:
+            if cfg["seq_len"] == 1:
+                # pick another seq_len that is not 1
+                seq_choices = [t for t in self.space["seq_len"] if t != 1]
+                cfg["seq_len"] = random.choice(seq_choices)
+
+
         # default cutoff_date for predict
         cfg["cutoff_date"] = "2024-10-01"
         return cfg
@@ -547,11 +572,12 @@ class HyperSearch:
             "run_id": run_id,
             "IC": IC,
             "sharpe": sharpe,
+            "holdout_IC": result.get("holdout_IC", None),
+            "holdout_sharpe": result.get("holdout_sharpe", None),
             "score": score,
             "config": result["config"],
             "run_dir": str(result["run_dir"])
         })
-
         update_summary_csv(self.results, self.summary_csv)
 
         # write plots
