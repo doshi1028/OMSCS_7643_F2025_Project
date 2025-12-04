@@ -183,19 +183,12 @@ def build_features_for_symbol(
         print(f"perf_foresight={perf_foresight}: kept {len(df)} rows with positive/negative signals")
 
     embeddings = np.stack(df["embedding"].values)
-    sentiment = np.stack(df["sentiment_probs"].values)
-    bullish = df["bullish_score"].values.reshape(-1, 1)
-
-    full_features = np.concatenate([embeddings, sentiment, bullish], axis=1)
-
-    
     hours = df["hour"].values
     timestamps = df["newsTimestamp"].values
     minutes = df["minutes_to_hour"].values
 
     X, lookback_hours = _average_lookback_windows(
-        #embeddings,
-        full_features,
+        embeddings,
         hours,
         lookback,
         mode=lookback_mode,

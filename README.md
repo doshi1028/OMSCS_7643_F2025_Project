@@ -142,14 +142,43 @@ python scripts/test_holdout.py --model lr --seq_len 1 --cutoff_date 2024-10-01
 
 This script reloads the saved model, scores all post-cutoff samples, prints regression/strategy metrics, and stores the holdout strategy plots under `output/reports/`.
 
+### Sentiment-only SOTA baseline (FinBERT)
+
+Compute FinBERT sentiment, aggregate hourly, and fit a linear regression on next-hour returns:
+
+```
+python scripts/sentiment_baseline.py \
+    --symbol BTC \
+    --cutoff-date 2024-10-01 \
+    --pretest-fraction 0.8 \
+    --horizon 1 \
+    --batch-size 16
+```
+
+Outputs:
+- `output/sentiment/<SYMBOL>_hourly_sentiment.parquet` – hourly averaged sentiment scores (ceil-rounded to avoid look-ahead).
+- `output/reports/sentiment_lr_<SYMBOL>.json` – train/test metrics (holdout rows remain untouched for final evaluation).
+
 ### Latent factor inspection
 
 ```
-python scripts/latent_inspection.py --symbol BTC --topics 25 --pca-components 10 \
-    --run-transformer --seq-len 1 --horizon 1
+python scripts/latent_inspection.py \
+    --symbol BTC \
+    --topics 25 \
+    --topic-words 12 \
+    --pca-components 10 \
+    --pc-top-k 5 \
+    --run-transformer \
+    --horizon 1
 ```
 
-This helper fits BERTopic on the per-row embeddings, summarizes each topic’s keywords, runs PCA on the embedding space, and highlights the headlines driving the top principal components. When `--run-transformer` is supplied, it also trains the existing transformer regressor on the hourly PCA features to gauge how well those latent factors explain next-hour returns.
+The latent inspection tool lets you peek inside the learned representation without training a brand-new forecasting model:
+
+- **BERTopic (c‑TF‑IDF):** runs on the raw, per-row embeddings/text (with Bitcoin-specific stop-words and stripped Twitter handles/numerics) to expose coherent headline themes and their representative keywords.
+- **PCA spotlight:** highlights the five most/least loaded headlines for the top PCs so you can see which topics are driving each latent direction.
+- **Transformer attribution (optional):** if `--run-transformer` is passed, an existing transformer encoder is trained on the hourly PCA series to predict next-hour returns, and gradient-based feature importances are computed for every PC (saved under `transformer_analysis.importance`). This reveals which latent factors move the loss the most, even if the model is not the final production forecaster.
+
+All summaries plus BERTopic artifacts land in `output/analysis/`.
 
 # FinBERT embedding proof of concept
 
