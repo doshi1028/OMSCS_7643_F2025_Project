@@ -1,0 +1,1051 @@
+"""
+Hyperparameter Search Framework
+Supports:
+  - Resume on interruption
+  - IC maximization (Sharpe > 0 required)
+  - Compatible with train.py, predict.py, evaluate.py
+  - Callable API (HyperSearch class) and CLI
+"""
+
+import os
+import json
+import time
+import random
+import subprocess
+import shutil
+from pathlib import Path
+from datetime import datetime
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+# ============================================================
+#   0. GLOBAL PATH CONFIG
+# ============================================================
+
+# Change this to your actual project path:
+GOOGLE_DRIVE_PATH = "/content/drive/MyDrive/CS7643 Project/OMSCS_7643_F2025_Project/"
+
+SCRIPTS_DIR = Path(GOOGLE_DRIVE_PATH) / "scripts"
+OUTPUT_DIR = Path(GOOGLE_DRIVE_PATH) / "output"
+HYPER_DIR = OUTPUT_DIR / "hyper_runs"
+
+TRAIN_PY = SCRIPTS_DIR / "train.py"
+PREDICT_PY = SCRIPTS_DIR / "predict.py"
+EVAL_PY = SCRIPTS_DIR / "evaluate.py"
+
+HYPER_DIR.mkdir(parents=True, exist_ok=True)
+
+
+
+# ============================================================
+#   1. UTILITY FUNCTIONS
+# ============================================================
+
+def save_json(obj, path):
+    with open(path, "w") as f:
+        json.dump(obj, f, indent=4)
+
+
+def load_json(path):
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def write_log(path, text):
+    with open(path, "a") as f:
+        f.write(text + "\n")
+
+
+def timestamp():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def next_run_id():
+    """
+    Scan hyper_runs/ and determine next run_xxxx number.
+    If interrupted, the next run id continues sequentially.
+    """
+    HYPER_DIR.mkdir(exist_ok=True)
+    runs = sorted([d for d in HYPER_DIR.iterdir() if d.is_dir() and d.name.startswith("run_")])
+    
+    if len(runs) == 0:
+        return 1
+    
+    last = runs[-1].name.replace("run_", "")
+    return int(last) + 1
+
+def plot_learning_curve(curve_json_path, out_path, title="Learning Curve"):
+    """
+    curve_json_path: model_curve.json path from train.py
+    out_path: where to save the PNG plot
+    """
+    if not curve_json_path.exists():
+        print(f"[WARN] Learning curve not found: {curve_json_path}")
+        return
+
+    import json
+    with open(curve_json_path, "r") as f:
+        curve = json.load(f)
+
+    train_loss = curve.get("train_loss", [])
+    val_loss = curve.get("val_loss", [])
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(train_loss, label="Train Loss", marker="", alpha=0.8)
+    plt.plot(val_loss, label="Val Loss", marker="", alpha=0.8)
+    plt.title(title)
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.grid(True, linestyle="--", alpha=0.5)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+
+def plot_sweep_curve(param_name, values, scores, out_path, model_name):
+    """
+    Draw: parameter values vs. final score.
+    """
+
+    # Sorting for stable plots
+    paired = list(zip(values, scores))
+    paired.sort(key=lambda x: x[0] if isinstance(x[0], (int, float)) else str(x[0]))
+
+    xs = [p[0] for p in paired]
+    ys = [p[1] for p in paired]
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(xs, ys, marker="o", linewidth=2)
+
+    # highlight best point
+    best_idx = int(np.argmax(ys))
+    plt.scatter([xs[best_idx]], [ys[best_idx]], color="red", s=100, label="Best")
+
+    plt.title(f"Sweep Curve — {model_name} — {param_name}", fontsize=14)
+    plt.xlabel(param_name, fontsize=12)
+    plt.ylabel("Final Score", fontsize=12)
+    plt.grid(True)
+    plt.legend()
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+
+# ============================================
+# Custom scoring (4-step system)
+# ============================================
+def compute_score_custom(m):
+
+    train_ic = m.get("train_IC", 0)
+    test_ic  = m.get("IC", 0)
+    hold_ic  = m.get("holdout_IC", 0)
+
+    pred_score = (
+        0.5 * hold_ic +
+        0.3 * test_ic +
+        0.2 * train_ic
+    )
+
+    test_sharpe = m.get("sharpe", 0)
+    hold_sharpe = m.get("holdout_sharpe", 0)
+
+    sharpe_score = (
+        0.7 * hold_sharpe +
+        0.3 * test_sharpe
+    )
+
+    overfit_penalty = (
+        -abs(train_ic - test_ic)
+        -abs(test_ic - hold_ic)
+    )
+
+    sharpe_penalty = -abs(test_sharpe - hold_sharpe)
+
+    flat_ratio = m.get("flat_ratio", 0)
+    flat_penalty = -1.0 if flat_ratio > 0.9 else 0.0
+
+    final_score = (
+        2.0 * pred_score +
+        1.5 * sharpe_score +
+        1.0 * overfit_penalty +
+        0.5 * sharpe_penalty +
+        flat_penalty
+    )
+
+    return final_score
+# ============================================================
+#   2. SEARCH SPACE DEFINITION (FULL, QUICK, CUSTOM)
+# ============================================================
+def get_modelwise_spaces():
+
+    return {
+
+        # ======================================================
+        #  MLP  
+        # ======================================================
+        "mlp": {
+            "fixed": {
+                "model": "mlp",
+                "horizon": 1,
+                "lookback": 24,
+                "seq_len": 1,
+                "batch_size": 64,
+                "lr": 3e-4,
+                "epochs": 20,
+                "weight_decay": 1e-5,
+                "scheduler": None,
+                "warmup_pct": 0.1,
+                "grad_clip": None,
+                "ema_decay": None,
+                "hidden_dim": 256,
+                "dropout": 0.1,
+                # unused
+                "num_layers": 1,
+                "lstm_proj_dim": 64,
+                "lstm_use_layernorm": 0,
+                "lstm_use_attention": 0,
+                # transformer placeholders
+                "tf_d_model": 128,
+                "tf_heads": 2,
+                "tf_layers": 2,
+                "tf_ff_dim": 512,
+                "tf_pool": "attention",
+                "tf_dropout": 0.1,
+                "tf_learnable_pos": 0,
+                "tf_use_cls_token": 0,
+                "tf_embed_scale": 0.1,
+            },
+
+            "vary": {
+                "lookback_mode": ["mean", "volume", "exp_decay", "attn", "max"],   # 5
+                "lookback": [6,12,18,24,30,36,48,60,72,96,120],                                           # 11
+                "lr": [1e-6,3e-6,1e-5,3e-5,1e-4,2e-4,3e-4,5e-4,7e-4,1e-3],                                # 10
+                "hidden_dim": [128,160,192,224,256,320,384,448,512],                                     # 9
+                "dropout": [0.0,0.05,0.1,0.15,0.2,0.25],                                                  # 6
+            }
+        },
+
+        # ======================================================
+        #  LSTM  
+        # ======================================================
+        "lstm": {
+            "fixed": {
+                "model": "lstm",
+                "horizon": 1,
+                "lookback": 24,
+                "seq_len": 24,
+                "batch_size": 64,
+                "lr": 1e-4,
+                "epochs": 20,
+                "weight_decay": 1e-5,
+                "scheduler": "cosine_warmup",
+                "warmup_pct": 0.1,
+                "hidden_dim": 256,
+                "dropout": 0.1,
+                "num_layers": 2,
+                "lstm_proj_dim": 64,
+                "lstm_use_layernorm": 0,
+                "lstm_use_attention": 0,
+                # transformer placeholder
+                "tf_d_model": 128,
+                "tf_heads": 2,
+                "tf_layers": 2,
+                "tf_ff_dim": 512,
+                "tf_pool": "attention",
+                "tf_dropout": 0.1,
+                "tf_learnable_pos": 0,
+                "tf_use_cls_token": 0,
+                "tf_embed_scale": 0.1,
+            },
+
+            "vary": {
+                "lookback_mode": ["mean","volume","exp_decay","attn"],                         # 6
+                "lookback": [6,12,24,36,48,60,72,96],                                                      # 8
+                "seq_len": [12,18,24,30,36,48],                                                            # 6
+                "lr": [1e-6,3e-6,1e-5,3e-5,1e-4,2e-4,3e-4],                                                # 7
+                "hidden_dim": [128,160,192,224,256,320,384,512],                                          # 8
+                "lstm_proj_dim": [32,48,64,96,128],                                                       # 5
+                "num_layers": [1,2,3,4],                                                                  # 4
+            }
+        },
+
+        # ======================================================
+        #  GRU  
+        # ======================================================
+        "gru": {
+            "fixed": {
+                "model": "gru",
+                "horizon": 1,
+                "lookback": 24,
+                "seq_len": 24,
+                "batch_size": 64,
+                "lr": 1e-4,
+                "epochs": 20,
+                "weight_decay": 1e-5,
+                "scheduler": "cosine_warmup",
+                "warmup_pct": 0.1,
+                "hidden_dim": 256,
+                "dropout": 0.1,
+                "num_layers": 2,
+                # transformer placeholder
+                "lstm_proj_dim": 64,
+                "lstm_use_layernorm": 0,
+                "lstm_use_attention": 0,
+                "tf_d_model": 128,
+                "tf_heads": 2,
+                "tf_layers": 2,
+                "tf_ff_dim": 512,
+                "tf_pool": "attention",
+                "tf_dropout": 0.1,
+                "tf_learnable_pos": 0,
+                "tf_use_cls_token": 0,
+                "tf_embed_scale": 0.1,
+            },
+
+            "vary": {
+                "lookback_mode": ["mean","volume","exp_decay","attn"],                        # 6
+                "lookback": [6,12,24,36,48,60,72],                                                        # 7
+                "seq_len": [12,18,24,30,36],                                                              # 5
+                "lr": [1e-6,3e-6,1e-5,3e-5,1e-4,2e-4,3e-4],                                                # 7
+                "hidden_dim": [128,160,192,224,256,320,384],                                              # 7
+                "num_layers": [1,2,3,4],                                                                  # 4
+            }
+        },
+
+        # ======================================================
+        #  Transformer  
+        # ======================================================
+        "transformer": {
+            "fixed": {
+                "model": "transformer",
+                "horizon": 1,
+                "lookback": 24,
+                "seq_len": 24,
+                "batch_size": 64,
+                "lr": 3e-4,
+                "epochs": 20,
+                "weight_decay": 1e-5,
+                "scheduler": "cosine_warmup",
+                "warmup_pct": 0.1,
+                "tf_d_model": 256,
+                "tf_heads": 4,
+                "tf_layers": 2,
+                "tf_ff_dim": 512,
+                "tf_pool": "attention",
+                "tf_dropout": 0.1,
+                "hidden_dim": 256,
+                "num_layers": 2,
+                "lstm_proj_dim": 64,
+                "lstm_use_layernorm": 0,
+                "lstm_use_attention": 0,
+                "tf_learnable_pos": 0,
+                "tf_use_cls_token": 0,
+                "tf_embed_scale": 0.1,
+            },
+
+            "vary": {
+                "lookback_mode": ["mean","volume","exp_decay","attn"],                       # 6
+                "lookback": [12,24,36,48,60,72,96],                                                      # 7
+                "seq_len": [12,18,24,30,36,48],                                                          # 6
+                "lr": [1e-6,3e-6,1e-5,3e-5,1e-4,2e-4,3e-4,5e-4],                                          # 8
+                "tf_d_model": [128,160,192,224,256,320,384,512],                                         # 8
+                "tf_heads": [2,3,4,6,8],                                                                  # 5
+                "tf_layers": [2,3,4,5],                                                                  # 4
+            }
+        }
+    }
+
+def get_search_space(mode="full"):
+    """
+    Returns a dictionary of parameter lists for sweeping.
+    mode = "full" / "quick" / "custom"
+    """
+
+    if mode == "quick":
+        # Light search for debugging
+        return {
+            "model": ["mlp", "lstm", "transformer"],
+            "seq_len": [1, 4],
+            "batch_size": [64],
+            "lr": [1e-4],
+            "epochs": [5],          # very small for quick test
+            "weight_decay": [0.0],
+            "scheduler": [None],
+            "ema_decay": [None],
+            "hidden_dim": [128],
+            "lstm_proj_dim": [64],
+            "tf_d_model": [128],
+            "tf_heads": [4],
+            "tf_layers": [2],
+            "tf_ff_dim": [256],
+            "tf_pool": ["attention"],
+            "tf_dropout": [0.1],
+        }
+
+    # ======================================================
+    # FULL SEARCH SPACE (recommended for IC optimization)
+    # ======================================================
+    if mode == "full":
+        return {
+
+            # Feature CHOICE
+            "lookback_mode": ["mean", "max", "volume", "exp_decay", "attn"],
+            "horizon": [1],
+            "lookback": [6, 12, 24, 48],
+
+            # =======================================
+            #  Model choice
+            # =======================================
+            "model": ["mlp", "lstm", "gru", "transformer"],
+
+            "seq_len": [1, 4, 8, 12, 24, 48, 120, 168, 336, 480, 720],
+
+            # =======================================
+            #  Optimization
+            # =======================================
+            "batch_size": [32, 64, 128],
+
+            # Learning rate 
+            "lr": [1e-5, 3e-5, 1e-4, 3e-4, 1e-3],
+
+            # epochs
+            "epochs": [15, 30],
+
+            # weight decay
+            "weight_decay": [0.0, 1e-5, 1e-4],
+
+            # warmup + cosine scheduler
+            "scheduler": [None, "cosine_warmup"],
+            "warmup_pct": [0.05, 0.1],
+
+            # grad clip
+            "grad_clip": [None, 1.0, 5.0],
+
+            "ema_decay": [None],
+
+            # =======================================
+            #  MLP
+            # =======================================
+            "hidden_dim": [128, 256, 512, 768],
+            "dropout": [0.1, 0.2],
+
+            # =======================================
+            #  LSTM
+            # =======================================
+            "num_layers": [1, 2, 3],
+            "lstm_proj_dim": [32, 64, 128, 256],
+            "lstm_use_layernorm": [0, 1],
+            "lstm_use_attention": [0, 1],
+
+            # =======================================
+            #  GRU
+            # =======================================
+
+            # =======================================
+            #  Transformer
+            # =======================================
+            "tf_d_model": [128, 256, 384, 512],
+            "tf_heads": [2, 4, 8],
+            "tf_layers": [2, 4],
+            "tf_ff_dim": [256, 512, 1024],
+            "tf_pool": ["attention", "cls"],
+            "tf_dropout": [0.1, 0.2],
+            "tf_learnable_pos": [0, 1],
+            "tf_use_cls_token": [0, 1],
+            "tf_embed_scale": [0.01, 0.1, 1.0]
+          
+
+        }
+
+    # ======================================================
+    # CUSTOM (user-defined later)
+    # ======================================================
+    if mode == "custom" or mode == "modelwise":
+        return {}
+    raise ValueError(f"Unknown search mode: {mode}")
+
+# ============================================================
+#   3. RUN EXECUTOR (train → predict → evaluate)
+# ============================================================
+
+class SingleRunExecutor:
+    def __init__(self, run_dir: Path, config: dict):
+        self.run_dir = run_dir
+        self.config = config
+        self.log_path = run_dir / "log.txt"
+
+    def rebuild_features(self):
+      cfg = self.config
+      cmd = [
+          "python", str(SCRIPTS_DIR / "build_features.py"),
+          "--horizon", str(cfg["horizon"]),
+          "--lookback", str(cfg["lookback"]),
+          "--lookback-mode", cfg["lookback_mode"],
+      ]
+
+      write_log(self.log_path, f"Rebuilding features with: {cmd}")
+      subprocess.run(cmd, check=True)
+
+
+    # --------------------------------------------------------
+    # Build train.py command line args
+    # --------------------------------------------------------
+    def build_train_cmd(self):
+        cfg = self.config
+        cmd = ["python", str(TRAIN_PY)]
+
+        # Required
+        cmd += ["--model", cfg["model"]]
+        cmd += ["--seq_len", str(cfg["seq_len"])]
+        cmd += ["--batch_size", str(cfg["batch_size"])]
+        cmd += ["--lr", str(cfg["lr"])]
+        cmd += ["--epochs", str(cfg["epochs"])]
+        cmd += ["--weight_decay", str(cfg["weight_decay"])]
+
+        # Optional
+        if cfg["scheduler"] is not None:
+            cmd += ["--scheduler", cfg["scheduler"]]
+        ema = cfg.get("ema_decay", None)
+        if ema is not None:
+            cmd += ["--ema_decay", str(ema)]
+        if cfg["warmup_pct"] is not None:
+            cmd += ["--warmup_pct", str(cfg["warmup_pct"])]
+
+
+        # Model-specific
+        cmd += ["--hidden_dim", str(cfg["hidden_dim"])]
+        cmd += ["--lstm_proj_dim", str(cfg["lstm_proj_dim"])]
+        cmd += ["--num_layers", str(cfg.get("num_layers", 2))]
+
+        # Transformer-specific
+        cmd += ["--tf_d_model", str(cfg["tf_d_model"])]
+        cmd += ["--tf_heads", str(cfg["tf_heads"])]
+        cmd += ["--tf_layers", str(cfg["tf_layers"])]
+        cmd += ["--tf_ff_dim", str(cfg["tf_ff_dim"])]
+        cmd += ["--tf_pool", cfg["tf_pool"]]
+        cmd += ["--tf_dropout", str(cfg["tf_dropout"])]
+
+        return cmd
+
+    # --------------------------------------------------------
+    # Build prediction command
+    # --------------------------------------------------------
+    def build_predict_cmd(self):
+        cfg = self.config
+        out_csv = self.run_dir / "predictions.csv"
+        cmd = [
+            "python", str(PREDICT_PY),
+            "--model", cfg["model"],
+            "--seq_len", str(cfg["seq_len"]),
+            "--batch_size", str(cfg["batch_size"]),
+            "--cutoff_date", cfg.get("cutoff_date", "2024-10-01")
+        ]
+        return cmd, out_csv
+
+    # --------------------------------------------------------
+    # Build evaluation command
+    # --------------------------------------------------------
+    def build_eval_cmd(self, pred_csv):
+        cmd = [
+            "python", str(EVAL_PY),
+            "--include-holdout",
+            "--predictions", str(pred_csv)
+        ]
+        return cmd
+
+    # --------------------------------------------------------
+    # Helper: run command and log output
+    # --------------------------------------------------------
+    def run_cmd(self, cmd):
+        write_log(self.log_path, f"\n[{timestamp()}] Running: {' '.join(cmd)}")
+
+        process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        )
+
+        for line in process.stdout:
+            write_log(self.log_path, line.rstrip())
+
+        process.wait()
+        return process.returncode
+
+    # --------------------------------------------------------
+    # Execute one full run (train → predict → evaluate)
+    # --------------------------------------------------------
+    def execute(self):
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+
+        write_log(self.log_path, f"=== RUN START {timestamp()} ===")
+        # STEP 0: rebuild features
+        self.rebuild_features()
+        print('New features built')
+        # Save config
+        save_json(self.config, self.run_dir / "config.json")
+
+        # ===========================
+        # 1. TRAIN
+        # ===========================
+        t0 = time.time()
+        train_cmd = self.build_train_cmd()
+        rc = self.run_cmd(train_cmd)
+        if rc != 0:
+            write_log(self.log_path, "ERROR: train.py failed")
+            return None
+        train_time = time.time() - t0
+
+        # ===========================
+        # 2. PREDICT
+        # ===========================
+        predict_cmd, pred_csv = self.build_predict_cmd()
+        rc = self.run_cmd(predict_cmd)
+        if rc != 0:
+            write_log(self.log_path, "ERROR: predict.py failed")
+            return None
+
+        # predictions save inside output/predictions/predictions_{model}.csv
+        pred_source = Path(GOOGLE_DRIVE_PATH) / "output" / "predictions" / f"predictions_{self.config['model']}.csv"
+        if pred_source.exists():
+            shutil.copy(pred_source, pred_csv)
+        else:
+            write_log(self.log_path, "ERROR: Prediction file missing.")
+            return None
+
+        # ===========================
+        # 3. EVALUATE
+        # ===========================
+        eval_cmd = self.build_eval_cmd(pred_csv)
+        rc = self.run_cmd(eval_cmd)
+        if rc != 0:
+            write_log(self.log_path, "ERROR: evaluate.py failed")
+            return None
+
+        # Evaluation output always saved to:
+        #   output/reports/performance_report.json
+        report_path = Path(GOOGLE_DRIVE_PATH) / "output" / "reports" / "performance_report.json"
+        if not report_path.exists():
+            write_log(self.log_path, "ERROR: evaluate output not found.")
+            return None
+
+        metrics = load_json(report_path)
+        save_json(metrics, self.run_dir / "metrics.json")
+
+        # ===========================
+        # Extract scores
+        # ===========================
+        model_pred = metrics.get("model_predictions", {})
+        subsets = model_pred.get("subset_metrics", {})
+        # test set
+        test = subsets.get("test", {})
+        test_reg = test.get("regression_metrics", {})
+        test_strat = test.get("strategy_metrics", {})
+
+        test_IC = test_reg.get("pearson_ic", None)
+        test_sharpe = test_strat.get("sharpe", None)
+
+        # holdout set
+        hold = subsets.get("holdout", {})
+        hold_reg = hold.get("regression_metrics", {})
+        hold_strat = hold.get("strategy_metrics", {})
+
+        hold_IC = hold_reg.get("pearson_ic", None)
+        hold_sharpe = hold_strat.get("sharpe", None)
+
+
+        write_log(self.log_path, 
+                  f"Test IC = {test_IC}, Test Sharpe = {test_sharpe}")
+
+        write_log(self.log_path, 
+                  f"Holdout IC = {hold_IC}, Holdout Sharpe = {hold_sharpe}")
+
+        return {
+            "IC": test_IC,
+            "sharpe": test_sharpe,
+            "holdout_IC": hold_IC,
+            "holdout_sharpe": hold_sharpe,
+            "train_time": train_time,
+            "config": self.config,
+            "run_dir": self.run_dir,
+            "metrics": metrics
+        }
+
+# ============================================================
+#   4. SCORING, LOGGING & VISUALIZATION
+# ============================================================
+
+import matplotlib.pyplot as plt
+
+
+def compute_score(IC, sharpe):
+    """
+    Main objective:
+        Maximize IC
+    Constraint:
+        Sharpe must be > 0 to avoid useless/no-trade models
+    """
+    if IC is None or sharpe is None:
+        return -9999
+
+    if sharpe <= 0:
+        return -9999
+
+    return IC   # maximize IC
+
+
+def save_global_best(best, path):
+    """
+    Save best_run.json structure:
+    {
+        "best_score": ...,
+        "best_IC": ...,
+        "best_sharpe": ...,
+        "best_run_dir": ...,
+        "config": {...}
+    }
+    """
+    info = {
+        "best_score": best["score"],
+        "best_IC": best["IC"],
+        "best_sharpe": best["sharpe"],
+        "best_run_dir": str(best["run_dir"]),
+        "config": best["config"]
+    }
+    save_json(info, path)
+
+
+def plot_metric_curve(values, ylabel, save_path):
+    if len(values) == 0:
+        return
+
+    plt.figure(figsize=(6, 4))
+    plt.plot(values, marker="o")
+    plt.xlabel("Run ID")
+    plt.ylabel(ylabel)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+
+def update_summary_csv(all_results, save_path):
+    """
+    Save summary of all runs as CSV:
+      run_id | IC | sharpe | score | model | seq_len | lr | ...
+    """
+    rows = []
+    for r in all_results:
+        row = {
+            "run_id": r["run_id"],
+            "IC_test": r["IC"],
+            "Sharpe_test": r["sharpe"],
+            "IC_holdout": r.get("holdout_IC", None),
+            "Sharpe_holdout": r.get("holdout_sharpe", None),
+            "score": r["score"]
+        }
+        # add config parameters
+        for k, v in r["config"].items():
+            row[k] = v
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    df.to_csv(save_path, index=False)
+# ============================================================
+#   5. HYPERSEARCH MAIN CLASS
+# ============================================================
+
+class HyperSearch:
+    def __init__(
+        self,
+        max_runs=50,
+        search_mode="full",
+        custom_space=None
+    ):
+        if search_mode == "modelwise":
+            self.max_runs = None
+        else:
+             self.max_runs = max_runs
+
+        # load search space
+        if search_mode == "custom" and custom_space is not None:
+            self.space = custom_space
+        else:
+            self.space = get_search_space(search_mode)
+
+        self.results = []
+        self.best = {
+            "score": -9999,
+            "IC": None,
+            "sharpe": None,
+            "run_dir": None,
+            "config": None,
+        }
+
+        self.best_path = HYPER_DIR / "best_run.json"
+        self.summary_csv = HYPER_DIR / "summary.csv"
+
+        self.IC_history = []
+        self.sharpe_history = []
+        self.score_history = []
+
+
+    # --------------------------------------------------------
+    # Sample a random configuration
+    # --------------------------------------------------------
+    def sample_config(self):
+        cfg = {}
+        for k, values in self.space.items():
+            if len(values) == 0:
+                continue
+            cfg[k] = random.choice(values)
+
+        if cfg["model"] == "mlp":
+            cfg["seq_len"] = 1
+
+        # force seq_len > 1 for sequence models
+        if cfg["model"] in ["transformer", "lstm", "gru"]:
+            if cfg["seq_len"] == 1:
+                # pick another seq_len that is not 1
+                seq_choices = [t for t in self.space["seq_len"] if t != 1]
+                cfg["seq_len"] = random.choice(seq_choices)
+
+
+        # default cutoff_date for predict
+        cfg["cutoff_date"] = "2024-10-01"
+        return cfg
+
+
+    # --------------------------------------------------------
+    # Run a single hyperparameter configuration
+    # --------------------------------------------------------
+    def run_once(self, run_id):
+        run_dir = HYPER_DIR / f"run_{run_id:04d}"
+        run_dir.mkdir(exist_ok=True)
+
+        cfg = self.sample_config()
+        executor = SingleRunExecutor(run_dir, cfg)
+
+        result = executor.execute()
+        if result is None:
+            return None
+
+        IC = result["IC"]
+        sharpe = result["sharpe"]
+        score = compute_score(IC, sharpe)
+
+        # record
+        self.IC_history.append(IC)
+        self.sharpe_history.append(sharpe)
+        self.score_history.append(score)
+
+        # update best
+        if score > self.best["score"]:
+            self.best.update({
+                "score": score,
+                "IC": IC,
+                "sharpe": sharpe,
+                "run_dir": result["run_dir"],
+                "config": result["config"]
+            })
+            save_global_best(self.best, self.best_path)
+
+        # save to results list
+        self.results.append({
+            "run_id": run_id,
+            "IC": IC,
+            "sharpe": sharpe,
+            "holdout_IC": result.get("holdout_IC", None),
+            "holdout_sharpe": result.get("holdout_sharpe", None),
+            "score": score,
+            "config": result["config"],
+            "run_dir": str(result["run_dir"])
+        })
+        update_summary_csv(self.results, self.summary_csv)
+
+        # write plots
+        plot_metric_curve(self.IC_history, "IC", HYPER_DIR / "IC_history.png")
+        plot_metric_curve(self.sharpe_history, "Sharpe", HYPER_DIR / "sharpe_history.png")
+        plot_metric_curve(self.score_history, "Score", HYPER_DIR / "score_history.png")
+
+        return score
+
+
+    # --------------------------------------------------------
+    # Main loop
+    # --------------------------------------------------------
+    def run(self):
+        print("===== HyperSearch Starting =====")
+        print(f"Output: {HYPER_DIR}")
+        print(f"Max runs: {self.max_runs}")
+        print(f"Search space keys: {list(self.space.keys())}")
+
+        start_id = next_run_id()
+
+        for i in range(start_id, start_id + self.max_runs):
+            print(f"\n=== RUN {i} / {start_id + self.max_runs - 1} ===")
+            score = self.run_once(i)
+            print(f"Run {i} finished, score={score}")
+
+        print("\n===== HyperSearch Completed =====")
+        print(f"Best score = {self.best['score']}")
+        print(f"Best IC    = {self.best['IC']}")
+        print(f"Best Sharpe= {self.best['sharpe']}")
+        print(f"Best run at: {self.best['run_dir']}")
+
+    def run_modelwise(self):
+
+      print("===== Modelwise Sweep Starting =====")
+
+      model_spaces = get_modelwise_spaces()
+      run_id = next_run_id()
+      print(f"[Resume] Starting from run_id = {run_id}")
+
+      for model_name, spec in model_spaces.items():
+
+          print(f"\n\n===================================")
+          print(f"===== MODEL: {model_name} =====")
+          print("===================================\n")
+
+          fixed_space = dict(spec["fixed"])
+          vary_space  = spec["vary"]
+
+          # sweep results for plotting
+          sweep_history = {}
+
+          for param_name, sweep_values in vary_space.items():
+              print(f"\n--- Sweeping {param_name} ---")
+
+              best_val = None
+              best_score = -1e9
+              best_result = None
+
+              sweep_history[param_name] = {"vals": [], "scores": []}
+
+              for val in sweep_values:
+
+                  cfg = dict(fixed_space)
+                  cfg[param_name] = val
+                  cfg["model"] = model_name
+                  cfg["cutoff_date"] = "2024-10-01"
+
+                  run_dir = HYPER_DIR / f"run_{run_id:04d}"
+                  executor = SingleRunExecutor(run_dir, cfg)
+                  result = executor.execute()
+
+                  if result is not None:
+
+                      metrics_dict = {
+                          "train_IC": result.get("train_IC", 0),
+                          "IC": result.get("IC", 0),
+                          "holdout_IC": result.get("holdout_IC", 0),
+                          "sharpe": result.get("sharpe", 0),
+                          "holdout_sharpe": result.get("holdout_sharpe", 0),
+                          "flat_ratio": result.get("flat_ratio", 0),
+                      }
+
+                      score = compute_score_custom(metrics_dict)
+
+                      # Record sweep values
+                      sweep_history[param_name]["vals"].append(val)
+                      sweep_history[param_name]["scores"].append(score)
+
+                      # Global results list update
+                      self.results.append({
+                          "run_id": run_id,
+                          "IC": result.get("IC"),
+                          "sharpe": result.get("sharpe"),
+                          "holdout_IC": result.get("holdout_IC"),
+                          "holdout_sharpe": result.get("holdout_sharpe"),
+                          "flat_ratio": metrics_dict["flat_ratio"],
+                          "score": score,
+                          "config": cfg,
+                          "run_dir": str(run_dir)
+                      })
+                      update_summary_csv(self.results, self.summary_csv)
+
+                      # Track best globally
+                      if score > self.best["score"]:
+                          self.best.update({
+                              "score": score,
+                              "IC": result.get("IC"),
+                              "sharpe": result.get("sharpe"),
+                              "run_dir": run_dir,
+                              "config": cfg
+                          })
+                          save_global_best(self.best, self.best_path)
+
+                      # Track best for this sweep
+                      if score > best_score:
+                          best_score = score
+                          best_val = val
+                          best_result = result
+
+                  run_id += 1
+
+              # ============================
+              # 🎨 Draw sweep curve
+              # ============================
+              curve_out = (
+                  HYPER_DIR /
+                  "sweeps" /
+                  model_name /
+                  f"{param_name}_curve.png"
+              )
+              plot_sweep_curve(
+                  param_name,
+                  sweep_history[param_name]["vals"],
+                  sweep_history[param_name]["scores"],
+                  curve_out,
+                  model_name
+              )
+              print(f"[Plot saved] {curve_out}")
+
+              # ============================
+              # Update fixed with best
+              # ============================
+              print(f"[Best for {param_name}] value={best_val}, score={best_score:.6f}")
+              fixed_space[param_name] = best_val
+
+          print(f"\n>>> Completed sweeps for {model_name}")
+          print(">>> Final fixed params:")
+          print(fixed_space)
+
+      print("\n===== Modelwise Sweep Completed =====")
+      print(f"Best score = {self.best['score']}")
+      print(f"Best IC    = {self.best['IC']}")
+      print(f"Best Sharpe= {self.best['sharpe']}")
+      print(f"Best run   = {self.best['run_dir']}")
+
+
+
+
+# ============================================================
+#   6. CLI ENTRYPOINT
+# ============================================================
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--max-runs", type=int, default=50)
+    parser.add_argument(
+      "--mode",
+      type=str,
+      default="full",
+      choices=["full", "quick", "custom", "modelwise"]
+  )
+
+    args = parser.parse_args()
+
+    hs = HyperSearch(
+        max_runs=args.max_runs,
+        search_mode=args.mode,
+    )
+    if args.mode == "modelwise":
+        hs.run_modelwise()
+    else:
+        hs.run()
+

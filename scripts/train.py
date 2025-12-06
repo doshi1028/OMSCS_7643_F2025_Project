@@ -186,6 +186,8 @@ def train(args):
     best_val = float("inf")
     patience, patience_counter = 5, 0
 
+    train_curve = {"train_loss": [], "val_loss": []}
+
     for epoch in range(epochs):
         train_loss = train_one_epoch(
             model, train_loader, optimizer, criterion,
@@ -206,6 +208,9 @@ def train(args):
             f"Epoch [{epoch+1}/{epochs}] "
             f"Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}"
         )
+        
+        train_curve["train_loss"].append(train_loss)
+        train_curve["val_loss"].append(val_loss)
 
         # Early stopping
         if val_loss < best_val:
@@ -231,6 +236,10 @@ def train(args):
             if patience_counter >= patience:
                 print("   ⏹ Early stopping: no improvement.")
                 break
+    # import json, os
+    curve_path = Path(MODEL_DIR) / f"{model_name}_curve.json"
+    with open(curve_path, "w") as f:
+        json.dump(train_curve, f, indent=2)
 
     print(f"\n🎉 Training finished. Best val loss = {best_val:.6f}")
 
