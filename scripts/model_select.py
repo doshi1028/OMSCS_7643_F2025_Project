@@ -20,18 +20,29 @@ def load_metrics(run_id):
         j = json.load(f)
 
     baseline = j["linear_regression_baseline"]
+
+    # baseline test + holdout metrics
     base_test = baseline["regression_metrics"]
     base_hold = baseline["holdout_metrics"]["regression_metrics"]
+
+    base_test_sr = baseline["strategy_metrics"]["sharpe"]
+    base_hold_sr = baseline["holdout_metrics"]["strategy_metrics"]["sharpe"]
 
     mtest = j["model_predictions"]["subset_metrics"]["test"]["regression_metrics"]
     mhold = j["model_predictions"]["subset_metrics"]["holdout"]["regression_metrics"]
 
     return {
-        # baseline
+        # ---- baseline metrics ----
+        "bl_da_test": base_test["directional_accuracy"],
         "bl_da_hold": base_hold["directional_accuracy"],
+        "bl_rmse_test": base_test["rmse"],
         "bl_rmse_hold": base_hold["rmse"],
+        "bl_ic_test": base_test["pearson_ic"],
+        "bl_ic_hold": base_hold["pearson_ic"],
+        "bl_sr_test": base_test_sr,
+        "bl_sr_hold": base_hold_sr,
 
-        # model
+        # ---- model metrics ----
         "da_test": mtest["directional_accuracy"],
         "da_hold": mhold["directional_accuracy"],
         "rmse_test": mtest["rmse"],
@@ -41,6 +52,7 @@ def load_metrics(run_id):
         "sr_test": j["model_predictions"]["subset_metrics"]["test"]["strategy_metrics"]["sharpe"],
         "sr_hold": j["model_predictions"]["subset_metrics"]["holdout"]["strategy_metrics"]["sharpe"],
     }
+
 
 
 # ===========================================================
@@ -67,8 +79,12 @@ for _, row in stage1.iterrows():
 
     cond1 = m["da_hold"] > 0.5
     cond2 = m["da_hold"] > m["bl_da_hold"]
+    cond3 = m["ic_hold"] > m["bl_ic_hold"]
+    cond4 = m["sr_hold"] > m["bl_sr_hold"]
 
-    if cond1 and cond2:
+
+
+    if cond1 and cond2 and cond3 and cond4:
         stage2_list.append(row)
 
 stage2 = pd.DataFrame(stage2_list)
@@ -212,16 +228,26 @@ for model, run_id in best_models.items():
 
     # Performance Table 
     perf_rows.append([
-        model,
-        run_id,
+        model, run_id,
+
+        # model metrics
         m["rmse_test"], m["rmse_hold"],
-        m["ic_test"], m["ic_hold"],
-        m["sr_test"], m["sr_hold"],
-        m["da_test"], m["da_hold"],
-        m["bl_da_hold"],
+        m["ic_test"],  m["ic_hold"],
+        m["sr_test"],  m["sr_hold"],
+        m["da_test"],  m["da_hold"],
+
+        # baseline metrics
+        m["bl_rmse_test"], m["bl_rmse_hold"],
+        m["bl_ic_test"],   m["bl_ic_hold"],
+        m["bl_sr_test"],   m["bl_sr_hold"],
+        m["bl_da_test"],   m["bl_da_hold"],
+
+        # generalization gaps
         abs(m["ic_test"] - m["ic_hold"]),
         abs(m["sr_test"] - m["sr_hold"]),
     ])
+
+
 
     # Hyperparameter Table 
     keys = KEY_PARAMS[model.lower()]
@@ -236,9 +262,16 @@ perf_table = pd.DataFrame(perf_rows, columns=[
     "IC Test", "IC Holdout",
     "SR Test", "SR Holdout",
     "DA Test", "DA Holdout",
-    "Baseline Holdout DA",
+
+    # baseline
+    "BL RMSE Test", "BL RMSE Holdout",
+    "BL IC Test", "BL IC Holdout",
+    "BL SR Test", "BL SR Holdout",
+    "BL DA Test", "BL DA Holdout",
+
     "IC Gap", "SR Gap"
 ])
+
 
 hyper_table = pd.DataFrame(hyper_rows, columns=[
     "Model", "Run", "Key Hyperparameters"
