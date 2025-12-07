@@ -123,7 +123,7 @@ def train(args):
     warmup_pct   = args.warmup_pct
     ema_decay    = args.ema_decay
     seed         = args.seed
-    print("\n=== 🚀 Loading Dataset ===")
+    print("\n=== Loading Dataset ===")
     set_seed(seed) 
     X = np.load(FEATURE_DIR / "X.npy")
     y = np.load(FEATURE_DIR / "y.npy")
@@ -155,8 +155,8 @@ def train(args):
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size)
 
-    print(f"✔ Train: {len(train_ds)} samples")
-    print(f"✔ Val: {len(val_ds)} samples")
+    print(f"Train: {len(train_ds)} samples")
+    print(f"Val: {len(val_ds)} samples")
 
     # Load model
     model = get_model(model_name, input_dim=input_dim, args=args)
@@ -182,7 +182,7 @@ def train(args):
     else:
         scheduler = None
 
-    print(f"\n=== 🧠 Training {model_name.upper()} on {device} ===")
+    print(f"\n=== Training {model_name.upper()} on {device} ===")
     best_val = float("inf")
     patience, patience_counter = 5, 0
 
@@ -221,7 +221,7 @@ def train(args):
                 model.state_dict(),
                 MODEL_DIR / f"{model_name}_best.pt"
             )
-            print("   💾 Saved new best model!")
+            print("  Saved new best model!")
             
             if ema is not None:
               # save EMA shadow weights
@@ -234,14 +234,14 @@ def train(args):
             patience_counter += 1
 
             if patience_counter >= patience:
-                print("   ⏹ Early stopping: no improvement.")
+                print("Early stopping: no improvement.")
                 break
     # import json, os
     curve_path = Path(MODEL_DIR) / f"{model_name}_curve.json"
     with open(curve_path, "w") as f:
         json.dump(train_curve, f, indent=2)
 
-    print(f"\n🎉 Training finished. Best val loss = {best_val:.6f}")
+    print(f"\n Training finished. Best val loss = {best_val:.6f}")
 
 class EMA:
     def __init__(self, model, decay=0.999):

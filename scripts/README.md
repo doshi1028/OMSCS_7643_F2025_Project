@@ -26,40 +26,9 @@ Our pipeline:
 4. Builds a supervised dataset (X, y)  
 5. Trains ML models to predict **next-hour return**  
 6. Evaluates prediction performance  
+7. Tuning and model Selection
 
 All steps are automated via `run_all.sh`.
-
----
-
-# 📂 Project Structure
-```bash
-project/
-│
-├── data/
-│ ├── crypto_data_hourly/ # Hourly parquet files for BTC, ETH, etc.
-│ ├── cryptopanic_news.csv # Raw CryptoPanic news dataset
-│
-├── output/
-│ ├── clean_news.parquet # Cleaned news data
-│ ├── clean_market.parquet # Cleaned market data
-│ ├── merged_dataset.parquet # News aligned with market hours
-│ ├── embeddings/ # Per-symbol FinBERT embeddings
-│ ├── features/ # Final ML dataset (X.npy, y.npy)
-│ ├── models/ # Saved models (best.pt)
-│ ├── predictions/ # Model prediction results CSV
-│
-├── src/
-│ ├── preprocess.py # Clean + align news & market data
-│ ├── embedding.py # Generate FinBERT/FinGPT embeddings
-│ ├── build_features.py # Build feature matrix X and labels y
-│ ├── model.py # MLP, LSTM, Transformer models
-│ ├── train.py # Training loop with early stopping
-│ ├── predict.py # Generate predictions using best model
-│
-├── run_all.sh # One-click full pipeline execution
-├── README.md
-└── requirements.txt
-```
 
 # 🏃‍♂️ How to Run 
 
@@ -67,7 +36,7 @@ suports **2 run methods**——one-click (recommend) or step by step.
 
 ---
 
-## ✅ **Option 1: One-click Full Pipeline（推荐）**
+## ✅ **Option 1: One-click Full Pipeline**
 
 ### **default mode（MLP，single hour）**
 ./run_all.sh
@@ -135,6 +104,36 @@ python src/predict.py --model lstm --seq_len 12
 
 
 ---
+
+## 6. Performance evaluation
+
+```
+python scripts/evaluate.py --cutoff-date 2024-10-01 \
+    --pretest-fraction 0.2 \
+    --predictions output/predictions/predictions_<model>.csv
+```
+---
+
+## 7. Parameter Tuning and Best Model Selection
+hypersearch.py
+Broad first-round hyperparameter sweep using random search across each model’s configuration space. Helps identify promising parameter ranges before more targeted tuning.
+```
+#In jupyter 
+from scripts.hypersearch import HyperSearch
+hs = HyperSearch(max_runs=30000, search_mode="full")
+hs.run()
+```
+hypersearch2.py
+Refined second-stage tuning that varies key parameters one at a time. Builds on the first-round search to narrow in on model-specific optimal settings.
+```
+python scripts/hypersearch2.py --mode modelwise --max-runs 2000
+```
+model_select.py
+Utility for ranking and comparing all tuning runs. Selects the best model based on information coefficient (IC), Sharpe ratio, and test–holdout stability metrics.
+```
+python scripts/model_select.py
+```
+
 
 # 📊 Models
 

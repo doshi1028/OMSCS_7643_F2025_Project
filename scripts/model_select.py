@@ -44,7 +44,7 @@ def load_metrics(run_id):
 
 
 # ===========================================================
-# STAGE 1: IC + Sharpe Filtering
+# STAGE 1: IC + Sharpe Filtering - only keep positives otherwise no better than guess
 # ===========================================================
 stage1 = df[
     (df["IC_test"] > 0) &
@@ -57,7 +57,7 @@ print(f"Stage 1: {len(stage1)} runs passed IC/SR filtering.\n")
 
 
 # ===========================================================
-# STAGE 2: DA filtering (holdout >0.5 AND > baseline)
+# STAGE 2: Direction Accuracy filtering (holdout >0.5 AND > baseline)
 # ===========================================================
 stage2_list = []
 for _, row in stage1.iterrows():
@@ -114,69 +114,6 @@ for m, run_id in best_models.items():
     print(f"{m}: run_id={run_id}")
 print("\n")
 
-# # ===========================================================
-# # (2) PLOT: Overfitting Plot (Test vs Holdout IC & DA)
-# # ===========================================================
-# plt.figure(figsize=(12, 8))
-
-# i = 1
-# for model, row in best_models.items():
-#     run_id = int(row["run_id"])
-#     m = load_metrics(run_id)
-
-#     plt.subplot(2, 2, i)
-#     plt.title(f"{model.upper()} (run {run_id})")
-
-#     # IC comparison
-#     plt.plot(["Test IC", "Holdout IC"], [m["ic_test"], m["ic_hold"]],
-#              marker="o", label="IC")
-
-#     # DA comparison
-#     plt.plot(["Test DA", "Holdout DA"], [m["da_test"], m["da_hold"]],
-#              marker="o", label="DA")
-
-#     plt.ylim(0, 1)
-#     plt.legend()
-#     i += 1
-
-# plt.tight_layout()
-# plt.savefig("best_models_overfitting.png", dpi=300)
-# plt.show()
-
-
-# # ===========================================================
-# # (3) TABLE: Model Comparison Table
-# # ===========================================================
-# table_rows = []
-
-# for model, row in best_models.items():
-#     run_id = int(row["run_id"])
-#     m = load_metrics(run_id)
-#     bl = m["bl_da_hold"]
-
-#     table_rows.append([
-#         model,
-#         row["run_id"],
-#         m["sr_test"], m["sr_hold"],
-#         m["ic_test"], m["ic_hold"],
-#         m["rmse_test"], m["rmse_hold"],
-#         m["da_test"], m["da_hold"],
-#         m["bl_da_hold"]
-#     ])
-
-# table = pd.DataFrame(table_rows, columns=[
-#     "Model", "Run",
-#     "SR Test", "SR Holdout",
-#     "IC Test", "IC Holdout",
-#     "RMSE Test", "RMSE Holdout",
-#     "DA Test", "DA Holdout",
-#     "Baseline DA Holdout"
-# ])
-
-# print("\n=== Final Comparison Table ===")
-# print(table.to_string(index=False))
-
-# table.to_csv("comparison_table.csv", index=False)
 import re
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -206,13 +143,6 @@ def parse_losses(log_path):
 # -------------------------------------
 # Best model runs determined from Stage 3
 # -------------------------------------
-# best_models = {
-#     "MLP": 5,
-#     "LSTM": 47,
-#     "GRU": 96,
-#     "Transformer": 156
-# }
-# best_models = { "mlp": row, "lstm": row, ... }
 
 BASE = Path("/content/drive/MyDrive/CS7643 Project/OMSCS_7643_F2025_Project")
 HYPER_RUNS = BASE / "output" / "hyper_runs"
@@ -243,7 +173,7 @@ for i, (model_name, run_id) in enumerate(best_models.items(), 1):
 plt.tight_layout()
 
 # ----------------------------------------------------
-# 🔥 SAVE THE FIGURE
+# SAVE THE FIGURE
 # ----------------------------------------------------
 save_path = FIG_DIR / "learning_curves_4models.png"
 plt.savefig(save_path, dpi=300)
@@ -251,9 +181,7 @@ plt.show()
 
 print(f"Learning curve figure saved to:\n{save_path}")
 
-# ===========================================================
 # Utility: Extract key hyperparameters for each model
-# ===========================================================
 KEY_PARAMS = {
     "mlp": ["lookback_mode", "lookback", "lr", "hidden_dim", "dropout"],
     "lstm": ["lookback_mode", "lookback", "seq_len", "lr", "hidden_dim", 
@@ -269,11 +197,9 @@ def load_config(run_id):
     with open(p, "r") as f:
         return json.load(f)
 
-# ===========================================================
 # Build Two Tables:
 #  1) Performance table
 #  2) Hyperparameter table
-# ===========================================================
 
 perf_rows = []
 hyper_rows = []
@@ -284,7 +210,7 @@ for model, run_id in best_models.items():
     m = load_metrics(run_id)
     cfg = load_config(run_id)
 
-    # ================ Performance Table ================
+    # Performance Table 
     perf_rows.append([
         model,
         run_id,
@@ -297,7 +223,7 @@ for model, run_id in best_models.items():
         abs(m["sr_test"] - m["sr_hold"]),
     ])
 
-    # ================ Hyperparameter Table ================
+    # Hyperparameter Table 
     keys = KEY_PARAMS[model.lower()]
     selected_params = {k: cfg.get(k, None) for k in keys}
 

@@ -1,10 +1,11 @@
 """
 Hyperparameter Search Framework
-Supports:
-  - Resume on interruption
-  - IC maximization (Sharpe > 0 required)
+  - Initial board base search for available parameters across models
+  - random search on space grids
+  - score recorded (for reference) IC maximization (Sharpe > 0 required)
   - Compatible with train.py, predict.py, evaluate.py
-  - Callable API (HyperSearch class) and CLI
+  - Resume on interruption
+  - Callable API (HyperSearch class) and CLI to enable run from sh or jupyter
 """
 
 import os
@@ -79,6 +80,9 @@ def next_run_id():
 
 # ============================================================
 #   2. SEARCH SPACE DEFINITION (FULL, QUICK, CUSTOM)
+#   Parameter set based on model.py
+#   Space based on common used grids
+#
 # ============================================================
 
 def get_search_space(mode="full"):

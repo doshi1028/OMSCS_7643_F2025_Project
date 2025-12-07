@@ -1,10 +1,9 @@
 """
-Hyperparameter Search Framework
-Supports:
+Hyperparameter Search Framework for second round
+  - search key parameter one by one
+  - new scrore system
   - Resume on interruption
-  - IC maximization (Sharpe > 0 required)
-  - Compatible with train.py, predict.py, evaluate.py
-  - Callable API (HyperSearch class) and CLI
+  - Most code inherited from hypersearch.py
 """
 
 import os
@@ -21,11 +20,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
-# ============================================================
-#   0. GLOBAL PATH CONFIG
-# ============================================================
-
-# Change this to your actual project path:
+# Paths used by the script
 GOOGLE_DRIVE_PATH = "/content/drive/MyDrive/CS7643 Project/OMSCS_7643_F2025_Project/"
 
 SCRIPTS_DIR = Path(GOOGLE_DRIVE_PATH) / "scripts"
@@ -137,7 +132,10 @@ def plot_sweep_curve(param_name, values, scores, out_path, model_name):
     plt.close()
 
 # ============================================
-# Custom scoring (4-step system)
+# Custom scoring based on 
+# IC/SR 
+# gaps between test and holdout - for overfitting or randomness
+# flat ratio - panalize weak trading signal
 # ============================================
 def compute_score_custom(m):
 
@@ -180,6 +178,8 @@ def compute_score_custom(m):
     return final_score
 # ============================================================
 #   2. SEARCH SPACE DEFINITION (FULL, QUICK, CUSTOM)
+#   Only modelwise used in second round - rest inherited from hyperseach.py
+#   Key paramters from most impactful ones in the first round of search 
 # ============================================================
 def get_modelwise_spaces():
 
@@ -986,7 +986,7 @@ class HyperSearch:
                   run_id += 1
 
               # ============================
-              # 🎨 Draw sweep curve
+              # Draw sweep curve
               # ============================
               curve_out = (
                   HYPER_DIR /

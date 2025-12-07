@@ -39,10 +39,19 @@ project/
 │ ├── preprocess.py # Clean + align news & market data
 │ ├── embedding.py # Generate FinBERT/FinGPT embeddings
 │ ├── build_features.py # Build feature matrix X and labels y
-│ ├── model.py # MLP, LSTM, Transformer models
+│ ├── model.py # MLP, GRU， LSTM, Transformer models
 │ ├── train.py # Training loop with early stopping
 │ ├── predict.py # Generate predictions using best model
 │
+│ ├── hypersearch.py        # First round board based parameter tuning (random)
+│ ├── hypersearch2.py       # Second round model key parameters tuning (parameter by parameter) 
+│ ├── model_select.py       # Select best model from tuning runs (based on IC, SR (gap between test/holdout), and flat ratio
+│
+│   ├── sentiment_baseline.py # Simple FinBERT sentiment score baseline
+│   ├── finbert_embed_demo.py # Demo to explore FinBERT embeddings
+│   ├── latent_inspection.py  # Latent factor to examine the model explanations
+│   ├── test_holdout.py       # Holdout evaluation script
+│ 
 ├── run_all.sh # One-click full pipeline execution
 ├── README.md
 └── requirements.txt
@@ -109,11 +118,10 @@ Saves the best checkpoint to `output/models/<model>_best.pt`.
 ## 5. Prediction
 
 ```
-python scripts/predict.py --model lr --seq_len 1 --cutoff_date 2024-10-01 \
-    --pretest_fraction 0.8
+python scripts/predict.py --model lr --seq_len 1 --cutoff_date 2024-10-01
 ```
 
-Loads the trained checkpoint and produces `output/predictions/predictions_<model>.csv` containing `pred` (forecasted next-hour return), `target` (realized return), the associated `timestamp`, and `subset` labels (`train`/`test` for pre-cutoff samples according to `--pretest_fraction`, `holdout` for post-cutoff samples). Sequence lengths >1 reuse the same label alignment logic as training.
+Loads the trained checkpoint and produces `output/predictions/predictions_<model>.csv` containing `pred` (forecasted next-hour return), `target` (realized return), the associated `timestamp`, and `subset` labels (`train` vs `holdout`, based on the cutoff date). Sequence lengths >1 reuse the same label alignment logic as training.
 
 ## 6. Performance evaluation
 
@@ -123,14 +131,33 @@ python scripts/evaluate.py --cutoff-date 2024-10-01 \
     --predictions output/predictions/predictions_<model>.csv
 ```
 
+## 7. Parameter Tuning and Best Model Selection
+hypersearch.py
+Broad first-round hyperparameter sweep using random search across each model’s configuration space. Helps identify promising parameter ranges before more targeted tuning.
+```
+#In jupyter 
+from scripts.hypersearch import HyperSearch
+hs = HyperSearch(max_runs=30000, search_mode="full")
+hs.run()
+```
+hypersearch2.py
+Refined second-stage tuning that varies key parameters one at a time. Builds on the first-round search to narrow in on model-specific optimal settings.
+```
+python scripts/hypersearch2.py --mode modelwise --max-runs 2000
+```
+model_select.py
+Utility for ranking and comparing all tuning runs. Selects the best model based on information coefficient (IC), Sharpe ratio, and test–holdout stability metrics.
+```
+python scripts/model_select.py
+```
 The evaluator:
 
-1. Fits the **linear regression baseline** on data strictly before the cutoff date, splitting that pre-cutoff segment chronologically (default 80/20) so the baseline test metrics reflect unseen-but-pre-cutoff data. The post-cutoff window remains untouched for final holdout evaluation unless `--include-holdout` is passed.
-2. If `--predictions` is provided, scores that CSV (any downstream model). When a `subset` column exists, only the `train`/`test` metrics are reported unless `--include-holdout` is specified.
+1. Fits the **linear regression baseline** on data strictly before the cutoff date, splitting that pre-cutoff segment chronologically (default 80/20) so the baseline test metrics reflect unseen-but-pre-cutoff data. The post-cutoff window remains untouched for final holdout evaluation.
+2. If `--predictions` is provided, scores that CSV (any downstream model). When a `subset` column exists, only the `train`/`holdout` metrics are reported for that file (no full-sample aggregate).
 3. Reports regression metrics (MSE, RMSE, MAE, MAPE, R², directional accuracy, Pearson/Spearman information coefficients, up/down precision & recall).
 4. Runs a naive long/flat/short backtest by thresholding predicted returns (threshold learned from the baseline’s training split).
 
-Add `--include-holdout` to include post-cutoff performance in both the baseline and prediction metrics. Results are saved to `output/reports/performance_report.json`, and timestamped strategy plots are written alongside the JSON.
+Results are saved to `output/reports/performance_report.json`, and timestamped strategy plots are written alongside the JSON.
 
 ### Holdout-only validation
 
@@ -141,44 +168,6 @@ python scripts/test_holdout.py --model lr --seq_len 1 --cutoff_date 2024-10-01
 ```
 
 This script reloads the saved model, scores all post-cutoff samples, prints regression/strategy metrics, and stores the holdout strategy plots under `output/reports/`.
-
-### Sentiment-only SOTA baseline (FinBERT)
-
-Compute FinBERT sentiment, aggregate hourly, and fit a linear regression on next-hour returns:
-
-```
-python scripts/sentiment_baseline.py \
-    --symbol BTC \
-    --cutoff-date 2024-10-01 \
-    --pretest-fraction 0.8 \
-    --horizon 1 \
-    --batch-size 16
-```
-
-Outputs:
-- `output/sentiment/<SYMBOL>_hourly_sentiment.parquet` – hourly averaged sentiment scores (ceil-rounded to avoid look-ahead).
-- `output/reports/sentiment_lr_<SYMBOL>.json` – train/test metrics (holdout rows remain untouched for final evaluation).
-
-### Latent factor inspection
-
-```
-python scripts/latent_inspection.py \
-    --symbol BTC \
-    --topics 25 \
-    --topic-words 12 \
-    --pca-components 10 \
-    --pc-top-k 5 \
-    --run-transformer \
-    --horizon 1
-```
-
-The latent inspection tool lets you peek inside the learned representation without training a brand-new forecasting model:
-
-- **BERTopic (c‑TF‑IDF):** runs on the raw, per-row embeddings/text (with Bitcoin-specific stop-words and stripped Twitter handles/numerics) to expose coherent headline themes and their representative keywords.
-- **PCA spotlight:** highlights the five most/least loaded headlines for the top PCs so you can see which topics are driving each latent direction.
-- **Transformer attribution (optional):** if `--run-transformer` is passed, an existing transformer encoder is trained on the hourly PCA series to predict next-hour returns, and gradient-based feature importances are computed for every PC (saved under `transformer_analysis.importance`). This reveals which latent factors move the loss the most, even if the model is not the final production forecaster.
-
-All summaries plus BERTopic artifacts land in `output/analysis/`.
 
 # FinBERT embedding proof of concept
 
