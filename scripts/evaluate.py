@@ -330,23 +330,32 @@ def linear_regression_report(
     split_idx = len(X_train)
     test_hours = hours_pre[split_idx : split_idx + len(y_test)]
 
-    preds = train_linear_baseline(X_train, y_train, X_test)
+    preds_test = train_linear_baseline(X_train, y_train, X_test)
+    preds_train = train_linear_baseline(X_train, y_train, X_train)
 
-    regression = compute_regression_metrics(y_test, preds)
+    regression = compute_regression_metrics(y_test, preds_test)
+    train_regression = compute_regression_metrics(y_train, preds_train)
     threshold = compute_signal_threshold(y_train, signal_percentile)
-    strategy = simulate_trading_strategy(y_test, preds, threshold)
+    strategy = simulate_trading_strategy(y_test, preds_test, threshold)
+    train_strategy = simulate_trading_strategy(y_train, preds_train, threshold)
 
     positions = np.where(
-        preds >= threshold,
+        preds_test >= threshold,
         1,
-        np.where(preds <= -threshold, -1, 0),
+        np.where(preds_test <= -threshold, -1, 0),
     )
     returns = positions * y_test
     plot_strategy_curves("baseline_pretest", positions, returns, test_hours, REPORT_DIR)
 
     result = {
-        "regression_metrics": to_native_dict(asdict(regression)),
-        "strategy_metrics": to_native_dict(asdict(strategy)),
+        "train_metrics": {
+            "regression_metrics": to_native_dict(asdict(train_regression)),
+            "strategy_metrics": to_native_dict(asdict(train_strategy)),
+        },
+        "test_metrics": {
+            "regression_metrics": to_native_dict(asdict(regression)),
+            "strategy_metrics": to_native_dict(asdict(strategy)),
+        },
         "threshold": float(threshold),
     }
 

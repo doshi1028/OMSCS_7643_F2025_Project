@@ -43,6 +43,8 @@ class RegressionMetrics:
     recall_up: float
     precision_down: float
     recall_down: float
+    pearson_ic: float
+    spearman_ic: float
 
 
 @dataclass
@@ -308,11 +310,11 @@ def main():
     print(f"=== Sentiment baseline for {args.symbol} ===")
     news_df, market_df = load_data(args.symbol)
     print(f"Loaded news rows: {len(news_df)}, market rows: {len(market_df)}")
-    scored = score_sentiment(news_df, model_name=args.model_name, device=args.device, batch_size=args.batch_size)
-    hourly = aggregate_hourly(scored)
-    hourly.to_parquet(SENTIMENT_DIR / f"{args.symbol}_hourly_sentiment.parquet", index=False)
-    print(f"Saved hourly sentiment → {SENTIMENT_DIR / f'{args.symbol}_hourly_sentiment.parquet'}")
-    # hourly = pd.read_parquet(SENTIMENT_DIR / f"{args.symbol}_hourly_sentiment.parquet")
+    # scored = score_sentiment(news_df, model_name=args.model_name, device=args.device, batch_size=args.batch_size)
+    # hourly = aggregate_hourly(scored)
+    # hourly.to_parquet(SENTIMENT_DIR / f"{args.symbol}_hourly_sentiment.parquet", index=False)
+    # print(f"Saved hourly sentiment → {SENTIMENT_DIR / f'{args.symbol}_hourly_sentiment.parquet'}")
+    hourly = pd.read_parquet(SENTIMENT_DIR / f"{args.symbol}_hourly_sentiment.parquet")
 
     returns = compute_returns(market_df, horizon=args.horizon)
     merged = hourly.merge(returns, on="hour", how="inner").dropna(subset=["sentiment_score", "return"])
